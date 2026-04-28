@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
-import { flowCommand, ingestCommand, nightCommand, replayCommand } from "../src/commands.js";
+import { doctorCommand, flowCommand, ingestCommand, nightCommand, replayCommand } from "../src/commands.js";
 import { cleanSessions } from "../src/hook/cleaner.js";
 import type { SessionRecord } from "../src/types.js";
 
@@ -18,7 +18,7 @@ function withTempCwd(fn: () => void) {
   }
 }
 
-describe.sequential("NMS v1.1 MVP", () => {
+describe.sequential("NMS v0.2 optimization", () => {
   test("ingest writes session and is idempotent", () => {
     withTempCwd(() => {
       const payload = {
@@ -42,7 +42,7 @@ describe.sequential("NMS v1.1 MVP", () => {
   test("flow and replay are stable on empty/non-empty data", () => {
     withTempCwd(() => {
       const emptyFlow = flowCommand();
-      expect(emptyFlow).toContain("最近 workflow");
+      expect(emptyFlow).toContain("Recent Workflow");
       expect(replayCommand()).toContain("暂无可复现 workflow");
 
       const payload = {
@@ -55,7 +55,10 @@ describe.sequential("NMS v1.1 MVP", () => {
       ingestCommand(inputFile);
 
       const flow = flowCommand();
-      expect(flow).toContain("高频技能");
+      expect(flow).toContain("Top Skills");
+      const flowJson = JSON.parse(flowCommand("json"));
+      expect(flowJson.quality).toBeDefined();
+      expect(flowJson.next_suggestions.length).toBeGreaterThan(0);
       expect(replayCommand()).toContain("Replaying workflow");
     });
   });
@@ -95,10 +98,12 @@ describe.sequential("NMS v1.1 MVP", () => {
 
   test("night dry-run runs full state machine", () => {
     withTempCwd(() => {
-      const out = JSON.parse(nightCommand({ dryRun: true, timeBudget: 1 }));
+      const out = JSON.parse(nightCommand({ dryRun: true, timeBudget: 1, explain: true }));
       expect(out.dry_run).toBe(true);
       expect(out.logs.join(" ")).toContain("State=PLAN");
       expect(out.logs.join(" ")).toContain("State=GATE");
+      expect(out.state_logs.length).toBeGreaterThan(0);
+      expect(out.explain_chain.length).toBeGreaterThan(0);
     });
   });
 
@@ -110,6 +115,7 @@ describe.sequential("NMS v1.1 MVP", () => {
       const applyInNoGit = JSON.parse(nightCommand({ apply: true }));
       expect(applyInNoGit.final_state).toBe("ROLLBACK");
       expect(applyInNoGit.failure.failure_reason).toContain("Not a git repository");
+      expect(applyInNoGit.failure.code).toBe("CONFIG_ERROR");
     });
   });
 
@@ -125,10 +131,34 @@ describe.sequential("NMS v1.1 MVP", () => {
 
       ingestCommand(inputFile);
       const flow = flowCommand();
-      const night = JSON.parse(nightCommand({ dryRun: true, timeBudget: 1 }));
+      const night = JSON.parse(nightCommand({ dryRun: true, timeBudget: 1, explain: true }));
+      const doctor = doctorCommand();
 
-      expect(flow).toContain("下一步建议");
+      expect(flow).toContain("Actionable Suggestions");
       expect(night.final_state).toBe("GATE");
+      expect(doctor).toContain("NMS Doctor");
+    });
+  });
+
+  test("schema auto migrates to v2 and stores perf window fields", () => {
+    withTempCwd(() => {
+      const oldDbPath = path.join(process.cwd(), ".nms");
+      fs.mkdirSync(oldDbPath, { recursive: true });
+      fs.writeFileSync(
+        path.join(oldDbPath, "data.json"),
+        JSON.stringify({
+          schema_version: 1,
+          sessions: [],
+          stats: { skill_counts: {}, workflow_counts: {}, last_updated: new Date().toISOString() },
+          user_profile: { style: "unknown", top_skills: [], top_workflows: [], updated_at: new Date().toISOString() }
+        }),
+        "utf8"
+      );
+      const doctor = doctorCommand();
+      expect(doctor).toContain("Schema Version");
+      const db = JSON.parse(fs.readFileSync(path.join(oldDbPath, "data.json"), "utf8"));
+      expect(db.schema_version).toBe(2);
+      expect(db.stats.perf_windows).toBeDefined();
     });
   });
 });

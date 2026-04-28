@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { flowCommand, ingestCommand, nightCommand, replayCommand } from "./commands.js";
+import { doctorCommand, flowCommand, ingestCommand, nightCommand, replayCommand } from "./commands.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.1.0");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.2.0");
 
 program
   .command("ingest")
@@ -16,9 +16,11 @@ program
 
 program
   .command("flow")
-  .description("show recent workflow, top skills, idle skills, and next suggestion")
-  .action(() => {
-    process.stdout.write(`${flowCommand()}\n`);
+  .description("show professional behavior dashboard")
+  .option("--format <type>", "human or json", "human")
+  .action((opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    process.stdout.write(`${flowCommand(format)}\n`);
   });
 
 program
@@ -33,14 +35,23 @@ program
   .description("run night harness; default dry-run")
   .option("--dry-run", "force dry run mode")
   .option("--apply", "enable write/apply mode explicitly")
+  .option("--explain", "show gate decision chain")
   .option("--time-budget <min>", "time budget in minutes", "5")
   .action((opts) => {
     const out = nightCommand({
       dryRun: Boolean(opts.dryRun),
       apply: Boolean(opts.apply),
+      explain: Boolean(opts.explain),
       timeBudget: Number(opts.timeBudget)
     });
     process.stdout.write(`${out}\n`);
+  });
+
+program
+  .command("doctor")
+  .description("read-only diagnostics for data and git safety")
+  .action(() => {
+    process.stdout.write(`${doctorCommand()}\n`);
   });
 
 program.parse();

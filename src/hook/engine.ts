@@ -7,26 +7,35 @@ import { buildUserProfile } from "./profile.js";
 import { buildEdges, buildWorkflow } from "./workflow.js";
 
 export function processCompressedEvent(input: HookInput, storage = new JsonStorage()): HookOutput {
+  const started = performance.now();
+  const db = storage.load();
+  const duplicate = storage.findDuplicateSession(db, input);
+  if (duplicate) return duplicate;
+
   const mergedText = `${input.compressed_text}\n${input.conversation}`;
   const skills = extractSkills(mergedText);
   const workflow = buildWorkflow(mergedText, skills);
-  const output: HookOutput = {
+  const baseOutput: HookOutput = {
     skills_used: skills,
     workflow,
     edges: buildEdges(workflow),
-    user_style: buildUserProfile(storage.recentSessions(1)).style
+    user_style: db.user_profile.style
   };
 
-  const session = storage.appendSession({ ...input, ...output });
-  const db = storage.load();
-  const cleaned = cleanSessions(db.sessions, DEFAULT_CONFIG);
+  const session = {
+    ...input,
+    ...baseOutput,
+    id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    created_at: new Date().toISOString()
+  };
+  const cleaned = cleanSessions([...db.sessions, session], DEFAULT_CONFIG);
   db.sessions = cleaned;
-  storage.save(db);
   const profile = buildUserProfile(cleaned);
-  storage.updateProfile(profile);
+  const ingestMs = Number((performance.now() - started).toFixed(2));
+  storage.saveDerivedIngest(db, profile, ingestMs);
 
   return {
-    ...output,
+    ...baseOutput,
     user_style: profile.style || session.user_style
   };
 }

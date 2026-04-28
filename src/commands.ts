@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { execSync } from "node:child_process";
 import { z } from "zod";
 import { runNightHarness } from "./harness/engine.js";
 import { processCompressedEvent } from "./hook/engine.js";
@@ -23,26 +24,102 @@ export function ingestCommand(inputFile?: string): string {
   return JSON.stringify(out, null, 2);
 }
 
-export function flowCommand(): string {
+function avg(values: number[]): number {
+  if (values.length === 0) return 0;
+  return Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2));
+}
+
+function bar(value: number, max = 100, width = 24): string {
+  const safe = Math.max(0, Math.min(value, max));
+  const fill = Math.round((safe / max) * width);
+  return `[${"#".repeat(fill)}${".".repeat(Math.max(0, width - fill))}] ${safe}/${max}`;
+}
+
+function formatWorkflowTrail(recent: string[][]): string {
+  if (recent.length === 0) return "(no workflow yet)";
+  return recent
+    .map((wf, idx) => `${idx + 1}. ${wf.length > 0 ? wf.join(" -> ") : "(empty)"}`)
+    .join("\n");
+}
+
+function flowSuggestions(db: ReturnType<JsonStorage["load"]>): Array<{ title: string; why: string; next_command: string }> {
+  const suggestions: Array<{ title: string; why: string; next_command: string }> = [];
+  if (db.sessions.length === 0) {
+    suggestions.push({
+      title: "开始积累行为样本",
+      why: "当前无会话数据，系统无法形成稳定 workflow。",
+      next_command: "nms ingest --input input.json"
+    });
+    return suggestions;
+  }
+  if (db.stats.quality_metrics.workflow_confidence < 0.6) {
+    suggestions.push({
+      title: "收敛主流程",
+      why: "主 workflow 置信度偏低，说明流程抖动较大。",
+      next_command: "nms replay"
+    });
+  }
+  if (db.stats.quality_metrics.stale_risk >= 60) {
+    suggestions.push({
+      title: "刷新陈旧技能",
+      why: "技能陈旧风险较高，建议用近期真实任务覆盖。",
+      next_command: "nms ingest --input input.json"
+    });
+  }
+  if (suggestions.length === 0) {
+    suggestions.push({
+      title: "保持节奏",
+      why: "行为稳定度较高，可继续复用主 workflow。",
+      next_command: "nms replay"
+    });
+  }
+  return suggestions;
+}
+
+export function flowCommand(format: "human" | "json" = "human"): string {
+  const started = performance.now();
   const storage = new JsonStorage();
   const db = storage.load();
   const recent = storage.recentSessions(3).map((s) => s.workflow);
   const skillEntries = Object.entries(db.stats.skill_counts).sort((a, b) => b[1] - a[1]);
   const topSkills = skillEntries.slice(0, 5).map(([k, v]) => `${k}(${v})`);
   const idleSkills = skillEntries.slice(5).map(([k]) => k);
-  const suggestion = db.user_profile.top_workflows[0]
-    ? `建议复用 workflow: ${db.user_profile.top_workflows[0]}`
-    : "建议先通过 nms ingest 积累行为数据";
+  const suggestions = flowSuggestions(db);
+  const payload = {
+    recent_workflow: recent,
+    top_skills: topSkills,
+    idle_skills: idleSkills,
+    next_suggestions: suggestions,
+    quality: db.stats.quality_metrics,
+    perf_health: {
+      ingest_avg_ms: avg(db.stats.perf_windows.ingest_ms),
+      flow_avg_ms: avg(db.stats.perf_windows.flow_ms),
+      night_avg_ms: avg(db.stats.perf_windows.night_ms)
+    }
+  };
+  storage.trackPerf("flow_ms", Number((performance.now() - started).toFixed(2)));
+
+  if (format === "json") return JSON.stringify(payload, null, 2);
 
   return [
-    "== 最近 workflow ==",
-    JSON.stringify(recent, null, 2),
-    "== 高频技能 ==",
+    "== NMS 行为驾驶舱 / Behavior Cockpit ==",
+    `Behavior Score      ${bar(db.stats.quality_metrics.behavior_score)}`,
+    `Workflow Confidence ${bar(Math.round(db.stats.quality_metrics.workflow_confidence * 100))}`,
+    `Session Velocity(7d): ${db.stats.quality_metrics.session_velocity_7d}`,
+    `Stale Risk: ${db.stats.quality_metrics.stale_risk}%`,
+    `Streak Days: ${db.stats.quality_metrics.streak_days}`,
+    "== 最近 workflow 轨迹 / Recent Workflow Trail ==",
+    formatWorkflowTrail(recent),
+    "== 高频技能 / Top Skills ==",
     topSkills.join(", ") || "(none)",
-    "== 闲置技能 ==",
+    "== 闲置技能 / Idle Skills ==",
     idleSkills.join(", ") || "(none)",
-    "== 下一步建议 ==",
-    suggestion
+    "== 可执行建议 / Actionable Suggestions ==",
+    ...suggestions.map((s, i) => `${i + 1}) ${s.title}\nwhy: ${s.why}\nnext: ${s.next_command}`),
+    "== 系统健康 / Perf Health ==",
+    `ingest_avg_ms=${avg(db.stats.perf_windows.ingest_ms)}, flow_avg_ms=${avg(
+      db.stats.perf_windows.flow_ms
+    )}, night_avg_ms=${avg(db.stats.perf_windows.night_ms)}`
   ].join("\n");
 }
 
@@ -53,13 +130,62 @@ export function replayCommand(): string {
   return `Replaying workflow:\n${wf.map((step, i) => `${i + 1}. ${step}`).join("\n")}`;
 }
 
-export function nightCommand(options: { dryRun?: boolean; apply?: boolean; timeBudget?: number }): string {
+export function nightCommand(options: {
+  dryRun?: boolean;
+  apply?: boolean;
+  timeBudget?: number;
+  explain?: boolean;
+}): string {
+  const started = performance.now();
   const apply = Boolean(options.apply);
   const dryRun = apply ? false : options.dryRun ?? true;
   const report = runNightHarness({
     dryRun,
     apply,
+    explain: Boolean(options.explain),
     timeBudgetMinutes: options.timeBudget ?? 5
   });
+  const storage = new JsonStorage();
+  storage.trackPerf("night_ms", Number((performance.now() - started).toFixed(2)));
   return JSON.stringify(report, null, 2);
+}
+
+export function doctorCommand(): string {
+  const storage = new JsonStorage();
+  const db = storage.load();
+  const checks: Array<{ check: string; status: "PASS" | "WARN"; detail: string }> = [];
+
+  checks.push({
+    check: "Schema Version",
+    status: db.schema_version >= 2 ? "PASS" : "WARN",
+    detail: `schema_version=${db.schema_version}`
+  });
+  checks.push({
+    check: "Data Integrity",
+    status: db.sessions.every((s) => !!s.id && !!s.created_at) ? "PASS" : "WARN",
+    detail: `sessions=${db.sessions.length}`
+  });
+  checks.push({
+    check: "Perf Window",
+    status: db.stats.perf_windows.max_window >= 50 ? "PASS" : "WARN",
+    detail: `window=${db.stats.perf_windows.max_window}`
+  });
+
+  try {
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", { stdio: "pipe" }).toString().trim();
+    checks.push({
+      check: "Git Safety",
+      status: branch === "main" ? "WARN" : "PASS",
+      detail: `current_branch=${branch}`
+    });
+  } catch {
+    checks.push({
+      check: "Git Safety",
+      status: "WARN",
+      detail: "not a git repository"
+    });
+  }
+
+  const lines = ["== NMS Doctor ==", ...checks.map((c) => `[${c.status}] ${c.check}: ${c.detail}`)];
+  return lines.join("\n");
 }

@@ -29,6 +29,20 @@ export interface Stats {
   skill_counts: Record<string, number>;
   workflow_counts: Record<string, number>;
   last_updated: string;
+  ingest_count: number;
+  perf_windows: {
+    ingest_ms: number[];
+    flow_ms: number[];
+    night_ms: number[];
+    max_window: number;
+  };
+  quality_metrics: {
+    behavior_score: number;
+    workflow_confidence: number;
+    session_velocity_7d: number;
+    stale_risk: number;
+    streak_days: number;
+  };
 }
 
 export interface Database {
@@ -85,6 +99,7 @@ export interface ReviewerOutput {
 }
 
 export interface FailureModel {
+  code: "CONFIG_ERROR" | "POLICY_BLOCK" | "TEST_FAIL" | "REVIEW_FAIL" | "TIMEOUT";
   failure_reason: string;
   recovery_hint: string;
   retry_count: number;
@@ -93,10 +108,20 @@ export interface FailureModel {
   artifacts_ref: string;
 }
 
+export interface StateLogEntry {
+  state: State;
+  input_summary: string;
+  decision: string;
+  duration_ms: number;
+  artifacts_ref: string;
+}
+
 export interface NightReport {
   dry_run: boolean;
   final_state: State;
   retries: number;
   logs: string[];
+  state_logs?: StateLogEntry[];
+  explain_chain?: string[];
   failure?: FailureModel;
 }

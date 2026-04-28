@@ -49,7 +49,7 @@ npm run dev -- flow
 npm run dev -- flow --format json
 npm run dev -- flow --visual
 npm run dev -- replay
-npm run dev -- night --dry-run --explain --time-budget 1
+npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
 npm run dev -- doctor
 ```
 
@@ -70,6 +70,16 @@ npm run dev -- doctor
 - 状态流转日志（含耗时与决策）
 - Gate 判定链
 - 失败分级（`CONFIG_ERROR / POLICY_BLOCK / TEST_FAIL / REVIEW_FAIL / TIMEOUT`）
+
+`task.json` 示例（真实任务输入）：
+```json
+{
+  "task": "实现某个真实需求的夜间执行计划",
+  "files": ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+  "constraints": ["仅允许 UI/new/test 范围内改动"],
+  "test_plan": ["npm test"]
+}
+```
 
 ## 安全边界（默认开启）
 

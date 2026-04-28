@@ -15,8 +15,8 @@ Upgrade prompt engineering into behavior engineering plus an execution harness.
 - `npm run dev -- ingest --input <file>`
 - `npm run dev -- flow`
 - `npm run dev -- replay`
-- `npm run dev -- night --dry-run`
-- `npm run dev -- night --apply`
+- `npm run dev -- night --dry-run --task-file <task.json>`
+- `npm run dev -- night --apply --task-file <task.json>`
 
 ## Input / Output Contract
 
@@ -49,5 +49,5 @@ Hook output:
 
 ## Promotion Notes
 
-- Start with `docs/demo.md` as 3-minute walkthrough.
+- Start with real session payloads and real task-file inputs.
 - Show dry-run first, then explain why `--apply` is intentionally restricted.

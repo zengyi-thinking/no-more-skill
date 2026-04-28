@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { z } from "zod";
-import { runNightHarness } from "./harness/engine.js";
+import { readPlannerInput, runNightHarness } from "./harness/engine.js";
 import { processCompressedEvent } from "./hook/engine.js";
 import { JsonStorage } from "./storage.js";
 import type { HookInput } from "./types.js";
@@ -201,14 +201,17 @@ export function nightCommand(options: {
   apply?: boolean;
   timeBudget?: number;
   explain?: boolean;
+  taskFile?: string;
 }): string {
   const started = performance.now();
   const apply = Boolean(options.apply);
   const dryRun = apply ? false : options.dryRun ?? true;
+  const plannerInput = options.taskFile ? readPlannerInput(options.taskFile) : undefined;
   const report = runNightHarness({
     dryRun,
     apply,
     explain: Boolean(options.explain),
+    plannerInput,
     timeBudgetMinutes: options.timeBudget ?? 5
   });
   const storage = new JsonStorage();

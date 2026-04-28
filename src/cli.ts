@@ -45,16 +45,18 @@ program
 
 program
   .command("night")
-  .description("run night harness; default dry-run")
+  .description("run night harness with real task input; default dry-run")
   .option("--dry-run", "force dry run mode")
   .option("--apply", "enable write/apply mode explicitly")
   .option("--explain", "show gate decision chain")
+  .option("--task-file <file>", "planner JSON file path")
   .option("--time-budget <min>", "time budget in minutes", "5")
   .action((opts) => {
     const out = nightCommand({
       dryRun: Boolean(opts.dryRun),
       apply: Boolean(opts.apply),
       explain: Boolean(opts.explain),
+      taskFile: opts.taskFile,
       timeBudget: Number(opts.timeBudget)
     });
     process.stdout.write(`${out}\n`);

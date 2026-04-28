@@ -49,7 +49,7 @@ npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- flow --format json
 npm run dev -- replay
-npm run dev -- night --dry-run --explain --time-budget 1
+npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
 npm run dev -- doctor
 ```
 
@@ -60,3 +60,14 @@ npm run dev -- doctor
 - `max_retry = 3`
 - write scope guard (path + file type)
 - protected behavior on main branch
+
+`task.json` example:
+
+```json
+{
+  "task": "run a real night execution plan",
+  "files": ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+  "constraints": ["UI/new/test scope only"],
+  "test_plan": ["npm test"]
+}
+```

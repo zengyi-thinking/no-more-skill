@@ -105,7 +105,20 @@ describe.sequential("NMS v0.2 optimization", () => {
 
   test("night dry-run runs full state machine", () => {
     withTempCwd(() => {
-      const out = JSON.parse(nightCommand({ dryRun: true, timeBudget: 1, explain: true }));
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          task: "real dry-run validation",
+          files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+          constraints: ["ui/new/tests only"],
+          test_plan: []
+        }),
+        "utf8"
+      );
+      const out = JSON.parse(
+        nightCommand({ dryRun: true, timeBudget: 1, explain: true, taskFile })
+      );
       expect(out.dry_run).toBe(true);
       expect(out.logs.join(" ")).toContain("State=PLAN");
       expect(out.logs.join(" ")).toContain("State=GATE");
@@ -116,10 +129,21 @@ describe.sequential("NMS v0.2 optimization", () => {
 
   test("night apply is blocked by default and safety checks", () => {
     withTempCwd(() => {
-      const dry = JSON.parse(nightCommand({}));
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          task: "real apply validation",
+          files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+          constraints: ["ui/new/tests only"],
+          test_plan: []
+        }),
+        "utf8"
+      );
+      const dry = JSON.parse(nightCommand({ taskFile }));
       expect(dry.dry_run).toBe(true);
 
-      const applyInNoGit = JSON.parse(nightCommand({ apply: true }));
+      const applyInNoGit = JSON.parse(nightCommand({ apply: true, taskFile }));
       expect(applyInNoGit.final_state).toBe("ROLLBACK");
       expect(applyInNoGit.failure.failure_reason).toContain("Not a git repository");
       expect(applyInNoGit.failure.code).toBe("CONFIG_ERROR");
@@ -138,12 +162,34 @@ describe.sequential("NMS v0.2 optimization", () => {
 
       ingestCommand(inputFile);
       const flow = flowCommand();
-      const night = JSON.parse(nightCommand({ dryRun: true, timeBudget: 1, explain: true }));
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          task: "e2e dry-run",
+          files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+          constraints: ["ui/new/tests only"],
+          test_plan: []
+        }),
+        "utf8"
+      );
+      const night = JSON.parse(
+        nightCommand({ dryRun: true, timeBudget: 1, explain: true, taskFile })
+      );
       const doctor = doctorCommand();
 
       expect(flow).toContain("Actionable Suggestions");
       expect(night.final_state).toBe("GATE");
       expect(doctor).toContain("NMS Doctor");
+    });
+  });
+
+  test("night without task-file returns config error", () => {
+    withTempCwd(() => {
+      const out = JSON.parse(nightCommand({ dryRun: true, explain: true }));
+      expect(out.final_state).toBe("ROLLBACK");
+      expect(out.failure.code).toBe("CONFIG_ERROR");
+      expect(out.failure.failure_reason).toContain("Missing planner input");
     });
   });
 

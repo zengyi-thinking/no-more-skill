@@ -5,7 +5,7 @@
 - [ ] `npm install`
 - [ ] `npm run build`
 - [ ] `npm test`
-- [ ] `npm run dev -- ingest --input <sample.json>`
+- [ ] `npm run dev -- ingest --input <real-session.json>`
 - [ ] `npm run dev -- flow`
 - [ ] `npm run dev -- night --dry-run --time-budget 1`
 
@@ -13,7 +13,7 @@
 
 - [ ] Ensure `.nms/`, `dist/`, `node_modules/` are ignored
 - [ ] Remove local temp files (for example `input.json`)
-- [ ] Confirm `README.md`, `SKILL.md`, `docs/demo.md` are up to date
+- [ ] Confirm `README.md`, `README.en.md`, `SKILL.md` are up to date
 - [ ] Confirm safety boundaries are explicit in docs
 
 ## 3) GitHub publish

@@ -25,6 +25,23 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 - `nms night`: guarded night loop (default dry-run)
 - `nms doctor`: read-only diagnostics
 
+## Slash Skill Routing
+
+If your host uses `/<skill>-<function>` style, use:
+
+- `/nms-ingest --input input.json`
+- `/nms-flow --format human`
+- `/nms-flow --visual`
+- `/nms-replay`
+- `/nms-night --dry-run --explain --task-file task.json`
+- `/nms-doctor`
+
+Local entry:
+
+```bash
+npm run dev:skill -- /nms-flow --format json
+```
+
 ## Quick Start
 
 ```bash

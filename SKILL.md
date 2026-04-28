@@ -17,6 +17,15 @@ Upgrade prompt engineering into behavior engineering plus an execution harness.
 - `npm run dev -- replay`
 - `npm run dev -- night --dry-run --task-file <task.json>`
 - `npm run dev -- night --apply --task-file <task.json>`
+- `npm run dev:skill -- /nms-flow --format json`
+
+Slash routes:
+
+- `/nms-ingest`
+- `/nms-flow`
+- `/nms-replay`
+- `/nms-night`
+- `/nms-doctor`
 
 ## Input / Output Contract
 

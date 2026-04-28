@@ -12,6 +12,7 @@ import {
   replayCommand
 } from "../src/commands.js";
 import { cleanSessions } from "../src/hook/cleaner.js";
+import { runSkillRoute } from "../src/skill-router.js";
 import type { SessionRecord } from "../src/types.js";
 
 function withTempCwd(fn: () => void) {
@@ -222,6 +223,36 @@ describe.sequential("NMS v0.2 optimization", () => {
       const content = fs.readFileSync(file, "utf8");
       expect(content).toContain("NMS 行为驾驶舱");
       expect(content).toContain("<html");
+    });
+  });
+
+  test("slash router maps /nms-flow and /nms-doctor", () => {
+    withTempCwd(() => {
+      const flow = runSkillRoute({ slashCommand: "/nms-flow", args: { format: "human" } });
+      expect(flow).toContain("Behavior Cockpit");
+      const doctor = runSkillRoute({ slashCommand: "/nms-doctor", args: {} });
+      expect(doctor).toContain("NMS Doctor");
+    });
+  });
+
+  test("slash router maps /nms-night with task-file", () => {
+    withTempCwd(() => {
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          task: "slash night check",
+          files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+          constraints: ["ui/new/tests only"],
+          test_plan: []
+        }),
+        "utf8"
+      );
+      const out = runSkillRoute({
+        slashCommand: "/nms-night",
+        args: { "dry-run": true, explain: true, "task-file": taskFile }
+      });
+      expect(out).toContain("\"final_state\": \"GATE\"");
     });
   });
 });

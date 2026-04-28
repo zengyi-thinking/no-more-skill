@@ -24,6 +24,23 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `nms night`: 受控夜间执行（默认 dry-run，`--explain` 可解释判定链）
 - `nms doctor`: 只读健康诊断（数据完整性、schema、git 安全状态）
 
+### Skill 调用格式（Slash Route）
+
+如果你的宿主环境习惯 `/<skill>-<function>`，可以直接使用：
+
+- `/nms-ingest --input input.json`
+- `/nms-flow --format human`
+- `/nms-flow --visual`
+- `/nms-replay`
+- `/nms-night --dry-run --explain --task-file task.json`
+- `/nms-doctor`
+
+本地入口命令：
+
+```bash
+npm run dev:skill -- /nms-flow --format json
+```
+
 ## 安装与快速开始
 
 ```bash

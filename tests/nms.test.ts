@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
-import { doctorCommand, flowCommand, ingestCommand, nightCommand, replayCommand } from "../src/commands.js";
+import {
+  doctorCommand,
+  flowCommand,
+  flowVisualCommand,
+  ingestCommand,
+  nightCommand,
+  replayCommand
+} from "../src/commands.js";
 import { cleanSessions } from "../src/hook/cleaner.js";
 import type { SessionRecord } from "../src/types.js";
 
@@ -159,6 +166,16 @@ describe.sequential("NMS v0.2 optimization", () => {
       const db = JSON.parse(fs.readFileSync(path.join(oldDbPath, "data.json"), "utf8"));
       expect(db.schema_version).toBe(2);
       expect(db.stats.perf_windows).toBeDefined();
+    });
+  });
+
+  test("flow visual generates html dashboard file", () => {
+    withTempCwd(() => {
+      const file = flowVisualCommand();
+      expect(fs.existsSync(file)).toBe(true);
+      const content = fs.readFileSync(file, "utf8");
+      expect(content).toContain("NMS 行为驾驶舱");
+      expect(content).toContain("<html");
     });
   });
 });

@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { doctorCommand, flowCommand, ingestCommand, nightCommand, replayCommand } from "./commands.js";
+import {
+  doctorCommand,
+  flowCommand,
+  flowVisualCommand,
+  ingestCommand,
+  nightCommand,
+  replayCommand
+} from "./commands.js";
 
 const program = new Command();
 program.name("nms").description("No More Skill - behavior engineering CLI").version("0.2.0");
@@ -18,7 +25,13 @@ program
   .command("flow")
   .description("show professional behavior dashboard")
   .option("--format <type>", "human or json", "human")
+  .option("--visual", "generate HTML visual dashboard")
   .action((opts) => {
+    if (Boolean(opts.visual)) {
+      const outPath = flowVisualCommand();
+      process.stdout.write(`Visual dashboard generated: ${outPath}\n`);
+      return;
+    }
     const format = opts.format === "json" ? "json" : "human";
     process.stdout.write(`${flowCommand(format)}\n`);
   });

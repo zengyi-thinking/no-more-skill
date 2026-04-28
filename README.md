@@ -47,6 +47,7 @@ npm run build
 npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- flow --format json
+npm run dev -- flow --visual
 npm run dev -- replay
 npm run dev -- night --dry-run --explain --time-budget 1
 npm run dev -- doctor
@@ -61,6 +62,9 @@ npm run dev -- doctor
 - 陈旧风险
 - 连续使用天数
 - 可执行建议（`why + next command`）
+
+`nms flow --visual`：
+- 生成本地 HTML 图表面板：`.nms/flow-dashboard.html`
 
 `nms night --explain` 默认输出：
 - 状态流转日志（含耗时与决策）

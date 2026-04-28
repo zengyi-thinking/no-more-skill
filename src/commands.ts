@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { execSync } from "node:child_process";
 import { z } from "zod";
 import { runNightHarness } from "./harness/engine.js";
@@ -121,6 +122,71 @@ export function flowCommand(format: "human" | "json" = "human"): string {
       db.stats.perf_windows.flow_ms
     )}, night_avg_ms=${avg(db.stats.perf_windows.night_ms)}`
   ].join("\n");
+}
+
+export function flowVisualCommand(): string {
+  const storage = new JsonStorage();
+  const db = storage.load();
+  const topSkills = Object.entries(db.stats.skill_counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
+  const quality = db.stats.quality_metrics;
+  const html = `<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NMS Flow Dashboard</title>
+  <style>
+    body { font-family: "Segoe UI", "PingFang SC", sans-serif; margin: 0; background: linear-gradient(135deg,#0f172a,#1e293b); color: #e2e8f0; }
+    .wrap { max-width: 980px; margin: 24px auto; padding: 20px; }
+    .card { background: rgba(15,23,42,0.75); border: 1px solid rgba(148,163,184,0.25); border-radius: 14px; padding: 16px; margin-bottom: 16px; backdrop-filter: blur(4px); }
+    .title { font-size: 24px; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+    .kpi { background: rgba(30,41,59,0.8); border-radius: 10px; padding: 10px; }
+    .kpi .v { font-size: 22px; font-weight: 700; }
+    .bar { height: 12px; background: #1f2937; border-radius: 8px; overflow: hidden; margin-top: 6px; }
+    .bar > div { height: 100%; background: linear-gradient(90deg,#22c55e,#3b82f6); }
+    .skill { margin: 8px 0; }
+    .label { display:flex; justify-content:space-between; font-size:14px; }
+    code { background: #0b1220; padding: 2px 6px; border-radius: 6px; color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="title">NMS 行为驾驶舱 / Behavior Cockpit</div>
+      <div class="grid">
+        <div class="kpi"><div>Behavior Score</div><div class="v">${quality.behavior_score}</div></div>
+        <div class="kpi"><div>Workflow Confidence</div><div class="v">${Math.round(
+          quality.workflow_confidence * 100
+        )}%</div></div>
+        <div class="kpi"><div>Session Velocity(7d)</div><div class="v">${quality.session_velocity_7d}</div></div>
+        <div class="kpi"><div>Streak Days</div><div class="v">${quality.streak_days}</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Top Skills</h3>
+      ${topSkills
+        .map(
+          ([name, count]) => `
+        <div class="skill">
+          <div class="label"><span>${name}</span><span>${count}</span></div>
+          <div class="bar"><div style="width:${Math.min(100, count * 20)}%"></div></div>
+        </div>`
+        )
+        .join("")}
+      <p>Use <code>nms flow --format json</code> for raw machine-readable data.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const outDir = path.join(process.cwd(), ".nms");
+  fs.mkdirSync(outDir, { recursive: true });
+  const outPath = path.join(outDir, "flow-dashboard.html");
+  fs.writeFileSync(outPath, html, "utf8");
+  return outPath;
 }
 
 export function replayCommand(): string {

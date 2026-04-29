@@ -24,6 +24,7 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 - `nms replay`: replay the most common workflow
 - `nms night`: guarded night loop (default dry-run)
 - `nms doctor`: read-only diagnostics
+- `nms report`: production report generation (optional image rendering)
 
 ## Slash Skill Routing
 
@@ -35,6 +36,7 @@ If your host uses `/<skill>-<function>` style, use:
 - `/nms-replay`
 - `/nms-night --dry-run --explain --task-file task.json`
 - `/nms-doctor`
+- `/nms-report --image`
 
 Local entry:
 
@@ -68,6 +70,7 @@ npm run dev -- flow --format json
 npm run dev -- replay
 npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
 npm run dev -- doctor
+npm run dev -- report
 ```
 
 ## Safety Boundaries
@@ -87,4 +90,10 @@ npm run dev -- doctor
   "constraints": ["UI/new/test scope only"],
   "test_plan": ["npm test"]
 }
+```
+Image relay env vars:
+```bash
+NMS_IMAGE_BASE_URL="https://api.apimart.ai/v1/images/generations"
+NMS_IMAGE_API_KEY="<token>"
+NMS_IMAGE_MODEL="gpt-image-2"
 ```

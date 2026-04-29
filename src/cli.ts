@@ -6,6 +6,7 @@ import {
   flowVisualCommand,
   ingestCommand,
   nightCommand,
+  reportCommand,
   replayCommand
 } from "./commands.js";
 
@@ -67,6 +68,25 @@ program
   .description("read-only diagnostics for data and git safety")
   .action(() => {
     process.stdout.write(`${doctorCommand()}\n`);
+  });
+
+program
+  .command("report")
+  .description("generate NMS progress report and optional relay images")
+  .option("--image", "generate images via relay url/apikey")
+  .option("--output-dir <dir>", "report output directory")
+  .option("--base-url <url>", "image relay endpoint url")
+  .option("--api-key <key>", "image relay API key")
+  .option("--model <name>", "image model, default gpt-image-2")
+  .action(async (opts) => {
+    const out = await reportCommand({
+      image: Boolean(opts.image),
+      outputDir: opts.outputDir,
+      baseUrl: opts.baseUrl,
+      apiKey: opts.apiKey,
+      model: opts.model
+    });
+    process.stdout.write(`Report generated: ${out}\n`);
   });
 
 program.parse();

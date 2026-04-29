@@ -1,4 +1,12 @@
-import { doctorCommand, flowCommand, flowVisualCommand, ingestCommand, nightCommand, replayCommand } from "./commands.js";
+import {
+  doctorCommand,
+  flowCommand,
+  flowVisualCommand,
+  ingestCommand,
+  nightCommand,
+  reportCommand,
+  replayCommand
+} from "./commands.js";
 
 export interface SkillRouteInput {
   slashCommand: string;
@@ -21,7 +29,7 @@ function toNum(v: string | boolean | number | undefined, fallback: number): numb
   return fallback;
 }
 
-export function runSkillRoute(input: SkillRouteInput): string {
+export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
   const cmd = input.slashCommand.trim();
   const args = input.args;
 
@@ -51,6 +59,16 @@ export function runSkillRoute(input: SkillRouteInput): string {
         taskFile: (args["task-file"] as string | undefined) ?? (args.taskFile as string | undefined),
         timeBudget: toNum(args["time-budget"] ?? args.timeBudget, 5)
       });
+    case "/nms-report": {
+      const reportPath = await reportCommand({
+        image: toBool(args.image),
+        outputDir: args["output-dir"] as string | undefined,
+        baseUrl: args["base-url"] as string | undefined,
+        apiKey: args["api-key"] as string | undefined,
+        model: args.model as string | undefined
+      });
+      return `Report generated: ${reportPath}`;
+    }
     case "/nms-doctor":
       return doctorCommand();
     default:

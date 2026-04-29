@@ -25,6 +25,5 @@ if (!slashCommand) {
 }
 
 const args = parseArgs(process.argv.slice(3));
-const result = runSkillRoute({ slashCommand, args });
+const result = await runSkillRoute({ slashCommand, args });
 process.stdout.write(`${result}\n`);
-

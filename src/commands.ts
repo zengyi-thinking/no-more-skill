@@ -258,3 +258,183 @@ export function doctorCommand(): string {
   const lines = ["== NMS Doctor ==", ...checks.map((c) => `[${c.status}] ${c.check}: ${c.detail}`)];
   return lines.join("\n");
 }
+
+async function saveImageFromResponse(
+  payload: any,
+  outputPath: string
+): Promise<"written" | "unsupported"> {
+  const candidate =
+    payload?.data?.[0]?.b64_json ??
+    payload?.data?.[0]?.base64 ??
+    payload?.b64_json ??
+    payload?.base64 ??
+    null;
+  if (candidate && typeof candidate === "string") {
+    fs.writeFileSync(outputPath, Buffer.from(candidate, "base64"));
+    return "written";
+  }
+  const imageUrl =
+    payload?.data?.[0]?.url ??
+    payload?.data?.[0]?.image_url ??
+    payload?.url ??
+    null;
+  if (imageUrl && typeof imageUrl === "string") {
+    const resp = await fetch(imageUrl);
+    if (!resp.ok) throw new Error(`Failed to download image URL: ${resp.status}`);
+    const arr = await resp.arrayBuffer();
+    fs.writeFileSync(outputPath, Buffer.from(arr));
+    return "written";
+  }
+  return "unsupported";
+}
+
+async function generateImageViaRelay(options: {
+  prompt: string;
+  outputPath: string;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<void> {
+  const baseUrl = options.baseUrl ?? process.env.NMS_IMAGE_BASE_URL;
+  const apiKey = options.apiKey ?? process.env.NMS_IMAGE_API_KEY;
+  const model = options.model ?? process.env.NMS_IMAGE_MODEL ?? "gpt-image-2";
+  if (!baseUrl || !apiKey) {
+    throw new Error("Missing image relay config. Set NMS_IMAGE_BASE_URL and NMS_IMAGE_API_KEY.");
+  }
+
+  const response = await fetch(baseUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      prompt: options.prompt,
+      n: 1,
+      size: "16:9",
+      resolution: "2k"
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Image relay error ${response.status}: ${text}`);
+  }
+  const payload = await response.json();
+  const result = await saveImageFromResponse(payload, options.outputPath);
+  if (result !== "written") {
+    throw new Error("Relay response does not include supported image data fields.");
+  }
+}
+
+export async function reportCommand(options?: {
+  image?: boolean;
+  outputDir?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+}): Promise<string> {
+  const storage = new JsonStorage();
+  const db = storage.load();
+  const reportDir = options?.outputDir
+    ? path.resolve(options.outputDir)
+    : path.join(process.cwd(), "docs", "reports", "latest");
+  const assetDir = path.join(reportDir, "assets");
+  fs.mkdirSync(assetDir, { recursive: true });
+
+  const topSkills = Object.entries(db.stats.skill_counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+  const topWorkflows = Object.entries(db.stats.workflow_counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const quality = db.stats.quality_metrics;
+
+  const progressSummary = [
+    `总会话数: ${db.sessions.length}`,
+    `主工作流置信度: ${quality.workflow_confidence}`,
+    `7日活跃度: ${quality.session_velocity_7d}`,
+    `连续天数: ${quality.streak_days}`,
+    `陈旧风险: ${quality.stale_risk}%`
+  ].join("；");
+
+  const skillPrompt = `制作专业信息图：展示NMS技能使用频率。数据：${topSkills
+    .map(([k, v]) => `${k}:${v}`)
+    .join(", ")}。风格：深色科技、清晰标签、中文标题“技能使用频率”。`;
+  const progressPrompt = `制作项目进展图：${progressSummary}。包含workflow排名：${topWorkflows
+    .map(([k, v]) => `${k}:${v}`)
+    .join(", ")}。风格：产品周报图表、专业、简洁。`;
+  const personaPrompt = `制作人格演化图：style=${db.user_profile.style}，top_skills=${db.user_profile.top_skills.join(
+    ","
+  )}，top_workflows=${db.user_profile.top_workflows.join(
+    ","
+  )}，behavior_score=${quality.behavior_score}。风格：成长路径可视化、专业温暖。`;
+
+  const skillImg = path.join(assetDir, "skill-frequency.png");
+  const progressImg = path.join(assetDir, "work-progress.png");
+  const personaImg = path.join(assetDir, "persona-evolution.png");
+
+  const imageNotes: string[] = [];
+  if (options?.image) {
+    await generateImageViaRelay({
+      prompt: skillPrompt,
+      outputPath: skillImg,
+      baseUrl: options.baseUrl,
+      apiKey: options.apiKey,
+      model: options.model
+    });
+    await generateImageViaRelay({
+      prompt: progressPrompt,
+      outputPath: progressImg,
+      baseUrl: options.baseUrl,
+      apiKey: options.apiKey,
+      model: options.model
+    });
+    await generateImageViaRelay({
+      prompt: personaPrompt,
+      outputPath: personaImg,
+      baseUrl: options.baseUrl,
+      apiKey: options.apiKey,
+      model: options.model
+    });
+    imageNotes.push("三张可视化图片已通过中转站生成。");
+  } else {
+    imageNotes.push("未启用 --image，仅生成文本报告。");
+  }
+
+  const reportMd = `# NMS 可视化周报 / NMS Visual Report
+
+更新时间：${new Date().toISOString()}
+
+## 1) Skill 使用频率
+
+${topSkills.map(([k, v], i) => `${i + 1}. ${k}: ${v}`).join("\n") || "(暂无数据)"}
+
+${fs.existsSync(skillImg) ? `![skill-frequency](${path.relative(reportDir, skillImg).replaceAll("\\", "/")})` : ""}
+
+## 2) 最近工作进展
+
+${progressSummary}
+
+${topWorkflows.map(([k, v], i) => `${i + 1}. ${k} (${v})`).join("\n") || "(暂无数据)"}
+
+${fs.existsSync(progressImg) ? `![work-progress](${path.relative(reportDir, progressImg).replaceAll("\\", "/")})` : ""}
+
+## 3) 人格演化 / 风格演化
+
+- 当前风格：${db.user_profile.style}
+- Top Skills：${db.user_profile.top_skills.join(", ") || "(暂无)"}
+- Top Workflows：${db.user_profile.top_workflows.join(", ") || "(暂无)"}
+- Behavior Score：${quality.behavior_score}
+
+${fs.existsSync(personaImg) ? `![persona-evolution](${path.relative(reportDir, personaImg).replaceAll("\\", "/")})` : ""}
+
+## 4) 说明
+
+${imageNotes.map((n) => `- ${n}`).join("\n")}
+`;
+
+  const reportPath = path.join(reportDir, "report.md");
+  fs.writeFileSync(reportPath, reportMd, "utf8");
+  return reportPath;
+}

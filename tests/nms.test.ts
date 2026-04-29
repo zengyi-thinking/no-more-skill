@@ -226,35 +226,73 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
-  test("slash router maps /nms-flow and /nms-doctor", () => {
-    withTempCwd(() => {
-      const flow = runSkillRoute({ slashCommand: "/nms-flow", args: { format: "human" } });
-      expect(flow).toContain("Behavior Cockpit");
-      const doctor = runSkillRoute({ slashCommand: "/nms-doctor", args: {} });
-      expect(doctor).toContain("NMS Doctor");
-      const flowColon = runSkillRoute({ slashCommand: "/nms:flow", args: { format: "human" } });
-      expect(flowColon).toContain("Behavior Cockpit");
-    });
+  test("slash router maps /nms-flow and /nms-doctor", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const flow = await runSkillRoute({ slashCommand: "/nms-flow", args: { format: "human" } });
+        expect(flow).toContain("Behavior Cockpit");
+        const doctor = await runSkillRoute({ slashCommand: "/nms-doctor", args: {} });
+        expect(doctor).toContain("NMS Doctor");
+        const flowColon = await runSkillRoute({
+          slashCommand: "/nms:flow",
+          args: { format: "human" }
+        });
+        expect(flowColon).toContain("Behavior Cockpit");
+      } finally {
+        process.chdir(old);
+      }
+    })();
   });
 
-  test("slash router maps /nms-night with task-file", () => {
-    withTempCwd(() => {
-      const taskFile = path.join(process.cwd(), "task.json");
-      fs.writeFileSync(
-        taskFile,
-        JSON.stringify({
-          task: "slash night check",
-          files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
-          constraints: ["ui/new/tests only"],
-          test_plan: []
-        }),
-        "utf8"
-      );
-      const out = runSkillRoute({
-        slashCommand: "/nms-night",
-        args: { "dry-run": true, explain: true, "task-file": taskFile }
-      });
-      expect(out).toContain("\"final_state\": \"GATE\"");
-    });
+  test("slash router maps /nms-night with task-file", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const taskFile = path.join(process.cwd(), "task.json");
+        fs.writeFileSync(
+          taskFile,
+          JSON.stringify({
+            task: "slash night check",
+            files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+            constraints: ["ui/new/tests only"],
+            test_plan: []
+          }),
+          "utf8"
+        );
+        const out = await runSkillRoute({
+          slashCommand: "/nms-night",
+          args: { "dry-run": true, explain: true, "task-file": taskFile }
+        });
+        expect(out).toContain("\"final_state\": \"GATE\"");
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("slash router maps /nms-report and writes markdown", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const out = await runSkillRoute({
+          slashCommand: "/nms-report",
+          args: {}
+        });
+        expect(out).toContain("Report generated:");
+        const reportPath = out.replace("Report generated: ", "").trim();
+        expect(fs.existsSync(reportPath)).toBe(true);
+        const content = fs.readFileSync(reportPath, "utf8");
+        expect(content).toContain("NMS 可视化周报");
+      } finally {
+        process.chdir(old);
+      }
+    })();
   });
 });

@@ -23,6 +23,7 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `nms replay`: 复现最常用 workflow
 - `nms night`: 受控夜间执行（默认 dry-run，`--explain` 可解释判定链）
 - `nms doctor`: 只读健康诊断（数据完整性、schema、git 安全状态）
+- `nms report`: 生成真实使用周报（可选出图）
 
 ### Skill 调用格式（Slash Route）
 
@@ -34,6 +35,7 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `/nms-replay`
 - `/nms-night --dry-run --explain --task-file task.json`
 - `/nms-doctor`
+- `/nms-report --image`
 
 如果你的宿主环境偏好 GSD 风格 `/<skill>:<function>`，也同样支持：
 
@@ -76,6 +78,7 @@ npm run dev -- flow --visual
 npm run dev -- replay
 npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
 npm run dev -- doctor
+npm run dev -- report
 ```
 
 ## 输出长什么样
@@ -90,6 +93,20 @@ npm run dev -- doctor
 
 `nms flow --visual`：
 - 生成本地 HTML 图表面板：`.nms/flow-dashboard.html`
+
+`nms report --image`：
+- 生成 `docs/reports/latest/report.md`
+- 调用你配置的中转站（默认模型 `gpt-image-2`）输出三张图：
+  - `skill-frequency.png`
+  - `work-progress.png`
+  - `persona-evolution.png`
+
+中转站环境变量：
+```bash
+NMS_IMAGE_BASE_URL="https://api.apimart.ai/v1/images/generations"
+NMS_IMAGE_API_KEY="<token>"
+NMS_IMAGE_MODEL="gpt-image-2"
+```
 
 `nms night --explain` 默认输出：
 - 状态流转日志（含耗时与决策）

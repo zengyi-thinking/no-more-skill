@@ -35,6 +35,14 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `/nms-night --dry-run --explain --task-file task.json`
 - `/nms-doctor`
 
+如果你的宿主环境偏好 GSD 风格 `/<skill>:<function>`，也同样支持：
+
+- `/nms:ingest`
+- `/nms:flow`
+- `/nms:replay`
+- `/nms:night`
+- `/nms:doctor`
+
 本地入口命令：
 
 ```bash

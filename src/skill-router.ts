@@ -25,7 +25,14 @@ export function runSkillRoute(input: SkillRouteInput): string {
   const cmd = input.slashCommand.trim();
   const args = input.args;
 
-  switch (cmd) {
+  const canonical = (() => {
+    if (cmd.startsWith("/nms:")) {
+      return `/nms-${cmd.slice("/nms:".length)}`;
+    }
+    return cmd;
+  })();
+
+  switch (canonical) {
     case "/nms-ingest":
       return ingestCommand(args.input as string | undefined);
     case "/nms-flow":
@@ -50,4 +57,3 @@ export function runSkillRoute(input: SkillRouteInput): string {
       return `Unsupported slash command: ${cmd}`;
   }
 }
-

@@ -321,10 +321,51 @@ async function generateImageViaRelay(options: {
     throw new Error(`Image relay error ${response.status}: ${text}`);
   }
   const payload = await response.json();
-  const result = await saveImageFromResponse(payload, options.outputPath);
-  if (result !== "written") {
-    throw new Error("Relay response does not include supported image data fields.");
+
+  const immediateResult = await saveImageFromResponse(payload, options.outputPath);
+  if (immediateResult === "written") return;
+
+  const taskId: string | undefined = payload?.data?.[0]?.task_id ?? payload?.data?.task_id;
+  if (!taskId) {
+    throw new Error("Relay response missing task_id and direct image data.");
   }
+
+  const base = new URL(baseUrl);
+  const taskUrl = `${base.origin}/v1/tasks/${taskId}?language=en`;
+
+  for (let i = 0; i < 90; i += 1) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const taskResp = await fetch(taskUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      }
+    });
+    if (!taskResp.ok) continue;
+    const taskPayload = await taskResp.json();
+    const status: string | undefined = taskPayload?.data?.status;
+    if (status === "failed" || status === "cancelled") {
+      throw new Error(`Image task failed: ${JSON.stringify(taskPayload)}`);
+    }
+    if (status !== "completed") continue;
+
+    const images = taskPayload?.data?.result?.images;
+    const imageUrl =
+      images?.[0]?.url?.[0] ??
+      images?.[0]?.url ??
+      taskPayload?.data?.result?.url ??
+      null;
+    if (!imageUrl || typeof imageUrl !== "string") {
+      throw new Error("Task completed but no image URL found.");
+    }
+    const download = await fetch(imageUrl);
+    if (!download.ok) throw new Error(`Failed to download generated image: ${download.status}`);
+    const arr = await download.arrayBuffer();
+    fs.writeFileSync(options.outputPath, Buffer.from(arr));
+    return;
+  }
+  throw new Error("Image task polling timeout.");
 }
 
 export async function reportCommand(options?: {
@@ -376,27 +417,29 @@ export async function reportCommand(options?: {
 
   const imageNotes: string[] = [];
   if (options?.image) {
-    await generateImageViaRelay({
-      prompt: skillPrompt,
-      outputPath: skillImg,
-      baseUrl: options.baseUrl,
-      apiKey: options.apiKey,
-      model: options.model
-    });
-    await generateImageViaRelay({
-      prompt: progressPrompt,
-      outputPath: progressImg,
-      baseUrl: options.baseUrl,
-      apiKey: options.apiKey,
-      model: options.model
-    });
-    await generateImageViaRelay({
-      prompt: personaPrompt,
-      outputPath: personaImg,
-      baseUrl: options.baseUrl,
-      apiKey: options.apiKey,
-      model: options.model
-    });
+    await Promise.all([
+      generateImageViaRelay({
+        prompt: skillPrompt,
+        outputPath: skillImg,
+        baseUrl: options.baseUrl,
+        apiKey: options.apiKey,
+        model: options.model
+      }),
+      generateImageViaRelay({
+        prompt: progressPrompt,
+        outputPath: progressImg,
+        baseUrl: options.baseUrl,
+        apiKey: options.apiKey,
+        model: options.model
+      }),
+      generateImageViaRelay({
+        prompt: personaPrompt,
+        outputPath: personaImg,
+        baseUrl: options.baseUrl,
+        apiKey: options.apiKey,
+        model: options.model
+      })
+    ]);
     imageNotes.push("三张可视化图片已通过中转站生成。");
   } else {
     imageNotes.push("未启用 --image，仅生成文本报告。");

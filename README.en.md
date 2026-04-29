@@ -2,6 +2,8 @@
 
 Default language: Chinese (`README.md`)
 
+![NMS Skill Hero](./images/nms-skill-hero.png)
+
 NMS is not just another prompt utility.  
 It is a behavior-engineering system that learns how you work and runs a guarded execution loop:
 - Learn user behavior during daytime (`skills/workflow/style`)

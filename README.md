@@ -27,6 +27,15 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `nms doctor`: 只读健康诊断（数据完整性、schema、git 安全状态）
 - `nms report`: 生成真实使用周报（可选出图）
 
+## 安装方式（Install Matrix）
+
+| 方式 | 适合场景 | 命令 |
+|---|---|---|
+| `npx skills` | 通用、最快 | `npx skills add zengyi-thinking/no-more-skill` |
+| Claude 插件市场 | Claude Code 用户 | `/plugin marketplace add zengyi-thinking/no-more-skill` |
+| 本地开发安装 | 调试/二次开发 | `npm install && npm run build && npm link` |
+| 固定版本 Zip | CI/可复现安装 | `npm run release:pack` 生成 `dist/releases/*.zip`（包含 marketplace + skill） |
+
 ### Skill 调用格式（Slash Route）
 
 如果你的宿主环境习惯 `/<skill>-<function>`，可以直接使用：
@@ -47,10 +56,32 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `/nms:night`
 - `/nms:doctor`
 
+如果你的宿主环境是 Codex 风格 `$<skill>-<function>`，也支持：
+
+- `$nms-flow`
+- `$nms-night --dry-run --task-file task.json`
+- `$nms-report --image`
+
+> 注意：在本地 PowerShell 终端里测试 `$nms-*` 时，需要加引号，例：`npm run dev:skill -- '$nms-flow' --format human`。在 Claude/Codex 宿主输入框里不需要引号。
+
+运行时命令对照：
+
+| Runtime | 命令风格 |
+|---|---|
+| Claude/Cursor/OpenCode | `/nms-flow` |
+| GSD/Gemini 风格 | `/nms:flow` |
+| Codex 风格 | `$nms-flow` |
+
 本地入口命令：
 
 ```bash
 npm run dev:skill -- /nms-flow --format json
+```
+
+Claude 插件市场安装后可直接执行：
+
+```bash
+/plugin install nms-skills@no-more-skill
 ```
 
 ## 安装与快速开始

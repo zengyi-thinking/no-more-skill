@@ -236,12 +236,17 @@ describe.sequential("NMS v0.2 optimization", () => {
         expect(flow).toContain("Behavior Cockpit");
         const doctor = await runSkillRoute({ slashCommand: "/nms-doctor", args: {} });
         expect(doctor).toContain("NMS Doctor");
-        const flowColon = await runSkillRoute({
-          slashCommand: "/nms:flow",
-          args: { format: "human" }
-        });
-        expect(flowColon).toContain("Behavior Cockpit");
-      } finally {
+      const flowColon = await runSkillRoute({
+        slashCommand: "/nms:flow",
+        args: { format: "human" }
+      });
+      expect(flowColon).toContain("Behavior Cockpit");
+      const flowCodex = await runSkillRoute({
+        slashCommand: "$nms-flow",
+        args: { format: "human" }
+      });
+      expect(flowCodex).toContain("Behavior Cockpit");
+    } finally {
         process.chdir(old);
       }
     })();

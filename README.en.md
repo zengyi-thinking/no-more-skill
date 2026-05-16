@@ -28,6 +28,15 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 - `nms doctor`: read-only diagnostics
 - `nms report`: production report generation (optional image rendering)
 
+## Install Matrix
+
+| Method | Best for | Command |
+|---|---|---|
+| `npx skills` | Fast cross-agent install | `npx skills add zengyi-thinking/no-more-skill` |
+| Claude plugin marketplace | Claude Code users | `/plugin marketplace add zengyi-thinking/no-more-skill` |
+| Local dev install | debugging and extension | `npm install && npm run build && npm link` |
+| Pinned zip artifact | CI/reproducible setup | `npm run release:pack` (includes marketplace + skill files) |
+
 ## Slash Skill Routing
 
 If your host uses `/<skill>-<function>` style, use:
@@ -40,10 +49,30 @@ If your host uses `/<skill>-<function>` style, use:
 - `/nms-doctor`
 - `/nms-report --image`
 
+GSD/Gemini style aliases:
+
+- `/nms:flow`
+- `/nms:night`
+- `/nms:report`
+
+Codex style aliases:
+
+- `$nms-flow`
+- `$nms-night --dry-run --task-file task.json`
+- `$nms-report --image`
+
+> Note: when testing `$nms-*` in local PowerShell, quote the command token: `npm run dev:skill -- '$nms-flow' --format human`. In host command palettes, quoting is not required.
+
 Local entry:
 
 ```bash
 npm run dev:skill -- /nms-flow --format json
+```
+
+After marketplace registration:
+
+```bash
+/plugin install nms-skills@no-more-skill
 ```
 
 ## Quick Start

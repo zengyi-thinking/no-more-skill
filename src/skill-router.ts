@@ -34,6 +34,12 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
   const args = input.args;
 
   const canonical = (() => {
+    if (cmd.startsWith("$nms-")) {
+      return `/${cmd.slice(1)}`;
+    }
+    if (cmd.startsWith("$nms:")) {
+      return `/nms-${cmd.slice("$nms:".length)}`;
+    }
     if (cmd.startsWith("/nms:")) {
       return `/nms-${cmd.slice("/nms:".length)}`;
     }

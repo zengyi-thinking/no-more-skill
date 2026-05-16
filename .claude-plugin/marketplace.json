@@ -1,0 +1,21 @@
+{
+  "name": "no-more-skill",
+  "owner": {
+    "name": "zengyi-thinking"
+  },
+  "metadata": {
+    "description": "NMS: behavior learning, workflow replay, safe night harness, and visual reports.",
+    "version": "0.2.0"
+  },
+  "plugins": [
+    {
+      "name": "nms-skills",
+      "description": "Behavior cockpit, report generation, and guarded night execution for AI agents.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/nms-core"
+      ]
+    }
+  ]
+}

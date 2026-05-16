@@ -3,3 +3,4 @@ dist/
 .nms/
 coverage/
 *.log
+references/

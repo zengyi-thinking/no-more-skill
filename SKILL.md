@@ -26,6 +26,16 @@ Slash routes:
 - `/nms-replay`
 - `/nms-night`
 - `/nms-doctor`
+- `/nms-report`
+
+Runtime aliases:
+
+- GSD/Gemini: `/nms:flow`, `/nms:night`, `/nms:report`
+- Codex: `$nms-flow`, `$nms-night`, `$nms-report`
+
+Install:
+
+- `npx skills add zengyi-thinking/no-more-skill`
 
 ## Input / Output Contract
 

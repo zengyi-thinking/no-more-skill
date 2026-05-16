@@ -4,6 +4,15 @@
   "description": "NMS: behavior engineering + execution harness",
   "type": "module",
   "main": "dist/index.js",
+  "files": [
+    "dist/**",
+    "skills/**",
+    ".claude-plugin/**",
+    "SKILL.md",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
   "bin": {
     "nms": "dist/cli.js",
     "nms-skill": "dist/skill-cli.js"
@@ -13,7 +22,10 @@
     "dev": "tsx src/cli.ts",
     "dev:skill": "tsx src/skill-cli.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "release:pack": "node scripts/release/pack-skill.mjs",
+    "release:validate": "node scripts/release/validate-release.mjs",
+    "release:check": "npm run build && npm test && npm run release:validate"
   },
   "keywords": [
     "cli",
@@ -29,6 +41,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "adm-zip": "^0.5.17",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"

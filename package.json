@@ -25,7 +25,8 @@
     "test:watch": "vitest",
     "release:pack": "node scripts/release/pack-skill.mjs",
     "release:validate": "node scripts/release/validate-release.mjs",
-    "release:check": "npm run build && npm test && npm run release:validate"
+    "release:smoke": "node scripts/release/smoke-install.mjs",
+    "release:check": "npm run build && npm test && npm run release:validate && npm run release:smoke"
   },
   "keywords": [
     "cli",

@@ -67,6 +67,7 @@ Local entry:
 
 ```bash
 npm run dev:skill -- /nms-flow --format json
+npm run dev -- route --cmd nms-flow --args-json "{\"format\":\"json\"}"
 ```
 
 After marketplace registration:

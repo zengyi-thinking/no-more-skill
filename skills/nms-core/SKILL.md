@@ -4,6 +4,7 @@ NMS core skill for behavior learning, workflow replay, explainable night runs, a
 
 ## Slash commands
 
+- `/nms action=flow|ingest|replay|night|doctor|report` (统一入口)
 - `/nms-ingest --input <file>`
 - `/nms-flow [--format human|json] [--visual]`
 - `/nms-replay`
@@ -16,6 +17,7 @@ NMS core skill for behavior learning, workflow replay, explainable night runs, a
 
 - GSD style: `/nms:flow`, `/nms:night`
 - Codex style: `$nms-flow`, `$nms-night`
+- Agent route mode: `nms route --cmd /nms-flow --args-json "{\"format\":\"json\"}"`
 
 ## Notes
 

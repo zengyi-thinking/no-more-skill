@@ -1,0 +1,30 @@
+{
+  "name": "nms-core",
+  "version": "0.2.1",
+  "description": "Behavior engineering skill with ingest/flow/replay/night/doctor/report commands.",
+  "entry": "SKILL.md",
+  "commands": [
+    {
+      "name": "/nms",
+      "description": "Unified entrypoint. Use action=flow|ingest|replay|night|doctor|report."
+    },
+    {
+      "name": "/nms-flow",
+      "description": "Show behavior cockpit in human/json mode."
+    },
+    {
+      "name": "/nms-night",
+      "description": "Run night harness in dry-run/apply mode with policy gate."
+    },
+    {
+      "name": "/nms-doctor",
+      "description": "Read-only diagnostics for data/config/git safety."
+    }
+  ],
+  "aliases": [
+    "/nms:flow",
+    "/nms:night",
+    "$nms-flow",
+    "$nms-night"
+  ]
+}

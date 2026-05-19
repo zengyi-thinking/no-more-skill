@@ -9,6 +9,7 @@ import {
   reportCommand,
   replayCommand
 } from "./commands.js";
+import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
 program.name("nms").description("No More Skill - behavior engineering CLI").version("0.2.0");
@@ -68,6 +69,20 @@ program
   .description("read-only diagnostics for data and git safety")
   .action(() => {
     process.stdout.write(`${doctorCommand()}\n`);
+  });
+
+program
+  .command("route")
+  .description("agent-friendly route entry for slash-style invocation")
+  .requiredOption("--cmd <slash>", "slash command, e.g. /nms-flow")
+  .option("--args-json <json>", "json object for command args", "{}")
+  .action(async (opts) => {
+    const parsedArgs = JSON.parse(String(opts.argsJson ?? "{}")) as Record<
+      string,
+      string | boolean | number | undefined
+    >;
+    const out = await runSkillRoute({ slashCommand: String(opts.cmd), args: parsedArgs });
+    process.stdout.write(`${out}\n`);
   });
 
 program

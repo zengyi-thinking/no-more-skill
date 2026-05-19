@@ -30,10 +30,34 @@ function toNum(v: string | boolean | number | undefined, fallback: number): numb
 }
 
 export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
-  const cmd = input.slashCommand.trim();
+  const rawCmd = input.slashCommand.trim();
+  const cmd = (() => {
+    if (rawCmd.startsWith("/") || rawCmd.startsWith("$")) return rawCmd;
+    if (rawCmd.startsWith("nms:")) return `/${rawCmd}`;
+    if (rawCmd.startsWith("nms-")) return `/${rawCmd}`;
+    if (rawCmd === "nms") return "/nms";
+    return rawCmd;
+  })();
   const args = input.args;
 
+  const helpText = [
+    "NMS Skill Commands:",
+    "- /nms [flow|ingest|replay|night|doctor|report] [flags]",
+    "- /nms-flow [--format human|json] [--visual]",
+    "- /nms-ingest --input <file>",
+    "- /nms-replay",
+    "- /nms-night --dry-run --task-file <task.json> [--explain]",
+    "- /nms-night --apply --task-file <task.json>",
+    "- /nms-doctor",
+    "- /nms-report [--image]"
+  ].join("\n");
+
   const canonical = (() => {
+    if (cmd === "/nms" || cmd === "$nms") {
+      const action = String(args.action ?? args.cmd ?? args.sub ?? args.command ?? "help").toLowerCase();
+      if (action === "help" || action === "h") return "/nms-help";
+      return `/nms-${action}`;
+    }
     if (cmd.startsWith("$nms-")) {
       return `/${cmd.slice(1)}`;
     }
@@ -47,6 +71,8 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
   })();
 
   switch (canonical) {
+    case "/nms-help":
+      return helpText;
     case "/nms-ingest":
       return ingestCommand(args.input as string | undefined);
     case "/nms-flow":
@@ -78,6 +104,6 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     case "/nms-doctor":
       return doctorCommand();
     default:
-      return `Unsupported slash command: ${cmd}`;
+      return `Unsupported slash command: ${cmd}\n\n${helpText}`;
   }
 }

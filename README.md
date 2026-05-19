@@ -76,6 +76,7 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 
 ```bash
 npm run dev:skill -- /nms-flow --format json
+npm run dev -- route --cmd nms-flow --args-json "{\"format\":\"json\"}"
 ```
 
 Claude 插件市场安装后可直接执行：

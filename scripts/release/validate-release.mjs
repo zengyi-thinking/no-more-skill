@@ -6,6 +6,7 @@ const root = process.cwd();
 
 const required = [
   ".claude-plugin/marketplace.json",
+  "agents/openai.yaml",
   "skills/nms-core/SKILL.md",
   "README.md",
   "README.en.md"
@@ -28,6 +29,7 @@ if (fs.existsSync(zipPath)) {
   const entries = new Set(zip.getEntries().map((e) => e.entryName.replaceAll("\\", "/")));
   const requiredZip = [
     "skills/nms-core/SKILL.md",
+    "agents/openai.yaml",
     ".claude-plugin/marketplace.json",
     "SKILL.md",
     "README.md",

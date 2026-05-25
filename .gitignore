@@ -4,4 +4,10 @@ dist/
 coverage/
 *.log
 references/
+!skills/nms-core/references/
+!skills/nms-core/references/**
+references_skill/
 my-video/
+docs/video
+docs/demo
+*.tgz

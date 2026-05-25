@@ -1,5 +1,5 @@
 import { DEFAULT_CONFIG } from "../config.js";
-import { JsonStorage } from "../storage.js";
+import { JsonStorage, redactText } from "../storage.js";
 import type { HookInput, HookOutput } from "../types.js";
 import { cleanSessions } from "./cleaner.js";
 import { extractSkills } from "./extractor.js";
@@ -10,7 +10,14 @@ export function processCompressedEvent(input: HookInput, storage = new JsonStora
   const started = performance.now();
   const db = storage.load();
   const duplicate = storage.findDuplicateSession(db, input);
-  if (duplicate) return duplicate;
+  if (duplicate) {
+    return {
+      skills_used: duplicate.skills_used,
+      workflow: duplicate.workflow,
+      edges: duplicate.edges,
+      user_style: duplicate.user_style
+    };
+  }
 
   const mergedText = `${input.compressed_text}\n${input.conversation}`;
   const skills = extractSkills(mergedText);
@@ -24,6 +31,8 @@ export function processCompressedEvent(input: HookInput, storage = new JsonStora
 
   const session = {
     ...input,
+    compressed_text: redactText(input.compressed_text),
+    conversation: redactText(input.conversation),
     ...baseOutput,
     id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     created_at: new Date().toISOString()
@@ -32,7 +41,7 @@ export function processCompressedEvent(input: HookInput, storage = new JsonStora
   db.sessions = cleaned;
   const profile = buildUserProfile(cleaned);
   const ingestMs = Number((performance.now() - started).toFixed(2));
-  storage.saveDerivedIngest(db, profile, ingestMs);
+  storage.saveDerivedIngest(db, profile, ingestMs, session);
 
   return {
     ...baseOutput,

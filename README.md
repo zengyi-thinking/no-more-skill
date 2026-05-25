@@ -8,6 +8,7 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - 白天学习你的真实工作行为（skills/workflow/style）
 - 夜间用受控状态机演练执行（PLAN -> EXECUTE -> TEST -> REVIEW -> GATE）
 - 全程有安全护栏、可解释日志、可复盘指标
+- 通过 `.nms` 本地数据层导出 Agent 可读上下文
 
 一句话：**把 Prompt 工程升级为 行为工程 + 执行系统。**
 
@@ -22,10 +23,26 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 
 - `nms ingest`: 注入压缩上下文，提取 skill/workflow 并更新用户画像
 - `nms flow`: 专业行为驾驶舱（支持 `--format human|json`）
+- `nms context`: 导出 Agent 可直接使用的用户习惯上下文
 - `nms replay`: 复现最常用 workflow
 - `nms night`: 受控夜间执行（默认 dry-run，`--explain` 可解释判定链）
 - `nms doctor`: 只读健康诊断（数据完整性、schema、git 安全状态）
-- `nms report`: 生成真实使用周报（可选出图）
+- `nms report`: 生成真实使用周报（支持 Markdown/HTML/JSON，可选出图）
+
+## `.nms` 本地数据层
+
+NMS v0.3 会在本地 `.nms/` 下保存真实行为数据：
+
+- `.nms/events/`：压缩上下文、报告、night run 等事件日志
+- `.nms/sessions/`：按年月拆分的真实会话行为记录
+- `.nms/derived/`：可重建的统计、profile、workflow、agent context 快照
+- `.nms/artifacts/`：报告、图片、prompt、night run 审计产物
+- `.nms/policies/`：安全策略与脱敏策略
+- `.nms/domains/`：coding/writing/research/learning/product/content 行为领域包
+
+`.nms/data.json` 仍保留为兼容入口。旧数据会自动迁移到 v3 文件结构，并在 `.nms/backups/` 留备份。
+
+> `.nms` 可能包含你的真实工作习惯和脱敏后的会话摘要。除非你明确知道自己在做什么，否则不要把真实 `.nms` 提交到公开仓库。
 
 ## 安装方式（Install Matrix）
 
@@ -43,9 +60,11 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `/nms-ingest --input input.json`
 - `/nms-flow --format human`
 - `/nms-flow --visual`
+- `/nms-context --task "生成一份项目周报" --format json`
 - `/nms-replay`
 - `/nms-night --dry-run --explain --task-file task.json`
 - `/nms-doctor`
+- `/nms-report --format html --real-only`
 - `/nms-report --image`
 
 如果你的宿主环境偏好 GSD 风格 `/<skill>:<function>`，也同样支持：
@@ -108,11 +127,12 @@ npm run build
 npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- flow --format json
+npm run dev -- context --task "帮我生成本周项目报告" --format json
 npm run dev -- flow --visual
 npm run dev -- replay
 npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
 npm run dev -- doctor
-npm run dev -- report
+npm run dev -- report --format html --real-only
 ```
 
 ## 输出长什么样
@@ -128,12 +148,18 @@ npm run dev -- report
 `nms flow --visual`：
 - 生成本地 HTML 图表面板：`.nms/flow-dashboard.html`
 
+`nms context --format json`：
+- 输出用户沟通风格、常用 workflow、禁忌项、安全策略
+- 适合 Agent 在执行任务前读取，而不是直接解析 `.nms` 内部文件
+
 `nms report --image`：
-- 生成 `docs/reports/latest/report.md`
+- 默认生成 `.nms/artifacts/reports/latest/report.md` 或 `report.html`
 - 调用你配置的中转站（默认模型 `gpt-image-2`）输出三张图：
   - `skill-frequency.png`
   - `work-progress.png`
   - `persona-evolution.png`
+- 图片 prompt 先保存到 `.nms/artifacts/prompts/`
+- 图片和报告登记到 `.nms/artifacts/artifacts.json`
 
 中转站环境变量：
 ```bash
@@ -164,6 +190,8 @@ NMS_IMAGE_MODEL="gpt-image-2"
 - `max_retry = 3`
 - 写入仅允许白名单路径与受限文件类型（UI/new/test）
 - main 分支提交保护
+- rollback 不会重置整个用户工作区
+- 报告和图片只使用真实 `.nms` 数据；样本不足时会明确说明
 
 ## 项目结构
 
@@ -172,6 +200,7 @@ NMS_IMAGE_MODEL="gpt-image-2"
 - `src/commands.ts`：CLI 命令实现
 - `tests/nms.test.ts`：核心测试
 - `SKILL.md`：Skill 规范入口
+- `skills/nms-core/references/*`：Agent 协议、数据模型、安全、报告、领域包
 
 ## 适合谁
 

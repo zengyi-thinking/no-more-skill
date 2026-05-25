@@ -9,6 +9,7 @@ It is a behavior-engineering system that learns how you work and runs a guarded 
 - Learn user behavior during daytime (`skills/workflow/style`)
 - Execute safely at night with a strict state machine
 - Keep outputs auditable and actionable
+- Export agent-readable context from local `.nms` behavior data
 
 In one line: **from prompt engineering to behavior engineering + execution system.**
 
@@ -23,10 +24,26 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 
 - `nms ingest`: ingest compressed context and extract skills/workflows
 - `nms flow`: behavior cockpit (`--format human|json`)
+- `nms context`: export agent-readable user behavior context
 - `nms replay`: replay the most common workflow
 - `nms night`: guarded night loop (default dry-run)
 - `nms doctor`: read-only diagnostics
-- `nms report`: production report generation (optional image rendering)
+- `nms report`: real-data report generation in Markdown/HTML/JSON (optional image rendering)
+
+## Local `.nms` Data Layer
+
+NMS v0.3 writes real behavior data under `.nms/`:
+
+- `.nms/events/`: append-only event logs
+- `.nms/sessions/`: real behavior sessions split by year/month
+- `.nms/derived/`: rebuildable stats, profile, workflow, and agent-context snapshots
+- `.nms/artifacts/`: reports, prompts, images, and night-run audit files
+- `.nms/policies/`: safety and redaction policies
+- `.nms/domains/`: behavior packs for coding, writing, research, learning, product, and content work
+
+`.nms/data.json` remains as a compatibility store. Older data is migrated to the v3 layout and backed up under `.nms/backups/`.
+
+Do not commit a real `.nms` folder to a public repository unless you have reviewed the contents.
 
 ## Install Matrix
 
@@ -44,9 +61,11 @@ If your host uses `/<skill>-<function>` style, use:
 - `/nms-ingest --input input.json`
 - `/nms-flow --format human`
 - `/nms-flow --visual`
+- `/nms-context --task "generate weekly project report" --format json`
 - `/nms-replay`
 - `/nms-night --dry-run --explain --task-file task.json`
 - `/nms-doctor`
+- `/nms-report --format html --real-only`
 - `/nms-report --image`
 
 GSD/Gemini style aliases:
@@ -99,10 +118,11 @@ Run:
 npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- flow --format json
+npm run dev -- context --task "generate weekly project report" --format json
 npm run dev -- replay
 npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
 npm run dev -- doctor
-npm run dev -- report
+npm run dev -- report --format html --real-only
 ```
 
 ## Safety Boundaries
@@ -112,6 +132,8 @@ npm run dev -- report
 - `max_retry = 3`
 - write scope guard (path + file type)
 - protected behavior on main branch
+- non-destructive rollback; NMS must not reset the whole working tree
+- reports and images use real `.nms` data and record artifacts
 
 `task.json` example:
 

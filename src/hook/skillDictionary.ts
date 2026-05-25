@@ -7,3 +7,10 @@ export const SKILL_DICTIONARY: Record<string, string[]> = {
 };
 
 export const FLAT_SKILLS = Object.values(SKILL_DICTIONARY).flat();
+
+export function skillCategory(skill: string): string {
+  for (const [category, skills] of Object.entries(SKILL_DICTIONARY)) {
+    if (skills.includes(skill)) return category;
+  }
+  return "unknown";
+}

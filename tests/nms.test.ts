@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import {
+  contextCommand,
   doctorCommand,
   flowCommand,
   flowVisualCommand,
   ingestCommand,
   nightCommand,
+  reportCommand,
   replayCommand
 } from "../src/commands.js";
 import { cleanSessions } from "../src/hook/cleaner.js";
@@ -38,12 +41,31 @@ describe.sequential("NMS v0.2 optimization", () => {
       fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
 
       ingestCommand(inputFile);
-      ingestCommand(inputFile);
+      const duplicateOut = JSON.parse(ingestCommand(inputFile));
 
       const db = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".nms", "data.json"), "utf8"));
       expect(db.sessions.length).toBe(1);
       expect(db.sessions[0].skills_used).toContain("PRD分析");
       expect(db.sessions[0].skills_used).toContain("代码生成");
+      expect(duplicateOut.compressed_text).toBeUndefined();
+      expect(duplicateOut.conversation).toBeUndefined();
+    });
+  });
+
+  test("ingest accepts opencode as a source tool", () => {
+    withTempCwd(() => {
+      const payload = {
+        compressed_text: "PRD分析 代码生成",
+        conversation: "opencode 先 PRD分析 再 代码生成",
+        tool: "opencode"
+      };
+      const inputFile = path.join(process.cwd(), "input.json");
+      fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+
+      ingestCommand(inputFile);
+
+      const db = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".nms", "data.json"), "utf8"));
+      expect(db.sessions[0].tool).toBe("opencode");
     });
   });
 
@@ -113,7 +135,7 @@ describe.sequential("NMS v0.2 optimization", () => {
           task: "real dry-run validation",
           files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
           constraints: ["ui/new/tests only"],
-          test_plan: []
+          test_plan: ["node -e \"process.exit(0)\""]
         }),
         "utf8"
       );
@@ -137,7 +159,7 @@ describe.sequential("NMS v0.2 optimization", () => {
           task: "real apply validation",
           files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
           constraints: ["ui/new/tests only"],
-          test_plan: []
+          test_plan: ["node -e \"process.exit(0)\""]
         }),
         "utf8"
       );
@@ -170,7 +192,7 @@ describe.sequential("NMS v0.2 optimization", () => {
           task: "e2e dry-run",
           files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
           constraints: ["ui/new/tests only"],
-          test_plan: []
+          test_plan: ["node -e \"process.exit(0)\""]
         }),
         "utf8"
       );
@@ -194,7 +216,27 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
-  test("schema auto migrates to v2 and stores perf window fields", () => {
+  test("night does not allow skipping test phase", () => {
+    withTempCwd(() => {
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          task: "missing tests should rollback",
+          files: ["sandbox/new/widget.tsx"],
+          constraints: ["ui/new/tests only"],
+          test_plan: []
+        }),
+        "utf8"
+      );
+      const out = JSON.parse(nightCommand({ dryRun: true, timeBudget: 1, explain: true, taskFile }));
+      expect(out.final_state).toBe("ROLLBACK");
+      expect(out.failure.code).toBe("TEST_FAIL");
+      expect(out.state_logs.some((entry: { state: string; decision: string }) => entry.state === "TEST" && entry.decision === "failed")).toBe(true);
+    });
+  });
+
+  test("schema auto migrates to v3 and writes v3 layout", () => {
     withTempCwd(() => {
       const oldDbPath = path.join(process.cwd(), ".nms");
       fs.mkdirSync(oldDbPath, { recursive: true });
@@ -211,8 +253,204 @@ describe.sequential("NMS v0.2 optimization", () => {
       const doctor = doctorCommand();
       expect(doctor).toContain("Schema Version");
       const db = JSON.parse(fs.readFileSync(path.join(oldDbPath, "data.json"), "utf8"));
-      expect(db.schema_version).toBe(2);
+      expect(db.schema_version).toBe(3);
       expect(db.stats.perf_windows).toBeDefined();
+      expect(fs.existsSync(path.join(oldDbPath, "events"))).toBe(true);
+      expect(fs.existsSync(path.join(oldDbPath, "sessions"))).toBe(true);
+      expect(fs.existsSync(path.join(oldDbPath, "derived", "stats.json"))).toBe(true);
+      expect(fs.existsSync(path.join(oldDbPath, "backups"))).toBe(true);
+    });
+  });
+
+  test("ingest redacts secrets and v3 session artifacts keep evidence", () => {
+    withTempCwd(() => {
+      const payload = {
+        compressed_text: "PRD分析 api_key=abc123 sk-secretSECRET123456",
+        conversation: "先 PRD分析 再 代码生成 Bearer abc.def.ghi",
+        tool: "codex"
+      };
+      const inputFile = path.join(process.cwd(), "input.json");
+      fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+
+      ingestCommand(inputFile);
+
+      const dbText = fs.readFileSync(path.join(process.cwd(), ".nms", "data.json"), "utf8");
+      expect(dbText).not.toContain("abc123");
+      expect(dbText).not.toContain("secretSECRET123456");
+      expect(dbText).not.toContain("abc.def.ghi");
+
+      const sessionDirs = path.join(process.cwd(), ".nms", "sessions");
+      const sessionFile = fs
+        .readdirSync(sessionDirs, { recursive: true })
+        .map((p) => path.join(sessionDirs, String(p)))
+        .find((p) => p.endsWith(".json"));
+      expect(sessionFile).toBeTruthy();
+      const session = JSON.parse(fs.readFileSync(sessionFile!, "utf8"));
+      expect(session.skills[0].category).toBe("分析类");
+      expect(session.workflow.confidence).toBeGreaterThan(0);
+    });
+  });
+
+  test("context command returns agent-readable json and artifact record", () => {
+    withTempCwd(() => {
+      const payload = {
+        compressed_text: "PRD分析 UI生成 代码生成",
+        conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+        tool: "codex"
+      };
+      const inputFile = path.join(process.cwd(), "input.json");
+      fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+      ingestCommand(inputFile);
+
+      const out = JSON.parse(contextCommand({ task: "生成项目周报", format: "json" }));
+      expect(out.user_style.avoid).toContain("demo 数据");
+      expect(out.safety_policy.requires_explicit_apply).toBe(true);
+      expect(out.data_quality.sample_count).toBe(1);
+      expect(fs.existsSync(path.join(process.cwd(), ".nms", "artifacts", "artifacts.json"))).toBe(true);
+    });
+  });
+
+  test("v3 sessions can rebuild compatibility data when data.json is missing", () => {
+    withTempCwd(() => {
+      const payload = {
+        compressed_text: "PRD分析 UI生成",
+        conversation: "先 PRD分析 再 UI生成",
+        tool: "codex"
+      };
+      const inputFile = path.join(process.cwd(), "input.json");
+      fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+      ingestCommand(inputFile);
+      fs.unlinkSync(path.join(process.cwd(), ".nms", "data.json"));
+
+      const flowJson = JSON.parse(flowCommand("json"));
+      expect(flowJson.top_skills.join(",")).toContain("PRD分析");
+      expect(fs.existsSync(path.join(process.cwd(), ".nms", "data.json"))).toBe(true);
+    });
+  });
+
+  test("report html uses real samples and registers report artifact", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const reportPath = await reportCommand({ format: "html", realOnly: true, period: "7d" });
+        expect(reportPath.endsWith("report.html")).toBe(true);
+        const content = fs.readFileSync(reportPath, "utf8");
+        expect(content).toContain("真实样本");
+        expect(content).toContain("样本不足");
+        const registry = JSON.parse(
+          fs.readFileSync(path.join(process.cwd(), ".nms", "artifacts", "artifacts.json"), "utf8")
+        );
+        expect(registry.some((item: { type: string; real_data_only: boolean }) => item.type === "report" && item.real_data_only)).toBe(true);
+        expect(reportPath).toContain(path.join(".nms", "artifacts", "reports", "latest"));
+        const eventsFile = fs.readdirSync(path.join(process.cwd(), ".nms", "events"))[0];
+        const eventsText = fs.readFileSync(path.join(process.cwd(), ".nms", "events", eventsFile), "utf8");
+        expect(eventsText).toContain("REPORT_GENERATED");
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("report period filters real sessions instead of using all history", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const first = path.join(process.cwd(), "first.json");
+        const second = path.join(process.cwd(), "second.json");
+        fs.writeFileSync(
+          first,
+          JSON.stringify({
+            compressed_text: "PRD分析",
+            conversation: "旧任务只做 PRD分析",
+            tool: "codex"
+          }),
+          "utf8"
+        );
+        fs.writeFileSync(
+          second,
+          JSON.stringify({
+            compressed_text: "UI生成",
+            conversation: "近期任务只做 UI生成",
+            tool: "codex"
+          }),
+          "utf8"
+        );
+        ingestCommand(first);
+        ingestCommand(second);
+        const dbPath = path.join(process.cwd(), ".nms", "data.json");
+        const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+        db.sessions[0].created_at = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), "utf8");
+
+        const reportPath = await reportCommand({ format: "json", realOnly: true, period: "7d" });
+        const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+        expect(report.sample_count).toBe(1);
+        expect(report.top_skills).toEqual([["UI生成", 1]]);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("night rollback is non-destructive on review failure", () => {
+    withTempCwd(() => {
+      fs.mkdirSync("sandbox/new", { recursive: true });
+      fs.writeFileSync("sandbox/new/keep.tsx", "user local change", "utf8");
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          task: "review fail should not reset files",
+          files: ["sandbox/new/keep.tsx"],
+          constraints: [],
+          test_plan: ["node -e \"process.exit(0)\""]
+        }),
+        "utf8"
+      );
+      const out = JSON.parse(nightCommand({ dryRun: true, timeBudget: 1, explain: true, taskFile }));
+      expect(out.final_state).toBe("ROLLBACK");
+      expect(out.failure.code).toBe("REVIEW_FAIL");
+      expect(fs.readFileSync("sandbox/new/keep.tsx", "utf8")).toBe("user local change");
+      expect(out.policy_logs.some((log: { name: string }) => log.name === "write_scope_guard")).toBe(true);
+    });
+  });
+
+  test("night apply commits from isolated worktree without switching current branch", () => {
+    withTempCwd(() => {
+      execSync("git init", { stdio: "pipe" });
+      execSync("git config user.email test@example.com", { stdio: "pipe" });
+      execSync("git config user.name Tester", { stdio: "pipe" });
+      fs.writeFileSync("README.md", "seed", "utf8");
+      execSync("git add README.md && git commit -m seed", { stdio: "pipe" });
+      execSync("git checkout -b feature/current", { stdio: "pipe" });
+      fs.mkdirSync("sandbox/new", { recursive: true });
+      fs.writeFileSync("sandbox/new/widget.tsx", "export const widget = true;\n", "utf8");
+      fs.writeFileSync("sandbox/new/widget.test.ts", "export const test = true;\n", "utf8");
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          task: "isolated apply",
+          files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+          constraints: ["ui/new/tests only"],
+          test_plan: ["node -e \"process.exit(0)\""]
+        }),
+        "utf8"
+      );
+
+      const out = JSON.parse(nightCommand({ apply: true, timeBudget: 1, explain: true, taskFile }));
+      const branch = execSync("git rev-parse --abbrev-ref HEAD").toString().trim();
+      const status = execSync("git status --short").toString();
+
+      expect(out.final_state).toBe("COMMIT");
+      expect(branch).toBe("feature/current");
+      expect(status).toContain("?? sandbox/");
+      expect(status).not.toContain("A  sandbox/");
+      expect(out.policy_logs.some((log: { name: string }) => log.name === "isolated_worktree_guard")).toBe(true);
     });
   });
 
@@ -280,7 +518,7 @@ describe.sequential("NMS v0.2 optimization", () => {
             task: "slash night check",
             files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
             constraints: ["ui/new/tests only"],
-            test_plan: []
+            test_plan: ["node -e \"process.exit(0)\""]
           }),
           "utf8"
         );

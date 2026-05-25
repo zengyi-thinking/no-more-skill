@@ -10,10 +10,13 @@ const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf
 const zipName = `nms-core-${version}.zip`;
 const zipPath = path.join(outDir, zipName);
 
-if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+for (const file of fs.readdirSync(outDir)) {
+  if (/^nms-core-.*\.zip$/.test(file)) fs.unlinkSync(path.join(outDir, file));
+}
 
 const includePaths = [
   "skills/nms-core",
+  "agents/openai.yaml",
   ".claude-plugin/marketplace.json",
   "SKILL.md",
   "README.md",

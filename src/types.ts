@@ -1,4 +1,5 @@
-export type ToolName = "claude" | "codex";
+export type ToolName = "claude" | "codex" | "opencode";
+export type SourceToolName = ToolName | "opencode" | "unknown";
 
 export interface HookInput {
   compressed_text: string;
@@ -50,6 +51,93 @@ export interface Database {
   sessions: SessionRecord[];
   stats: Stats;
   user_profile: UserProfile;
+}
+
+export interface NmsEvent {
+  event_id: string;
+  type: "CONTEXT_COMPRESSED" | "PROFILE_PATCH" | "REPORT_GENERATED" | "NIGHT_RUN";
+  created_at: string;
+  project_id: string;
+  source_tool: SourceToolName;
+  input_hash: string;
+  redaction_level: "safe" | "private" | "raw";
+  payload_ref: string;
+}
+
+export interface SessionV3 {
+  id: string;
+  created_at: string;
+  project_id: string;
+  domain: string;
+  source_tool: SourceToolName;
+  compressed_text_ref?: string;
+  conversation_ref?: string;
+  skills: Array<{
+    name: string;
+    category: string;
+    confidence: number;
+    evidence: string[];
+  }>;
+  workflow: {
+    steps: string[];
+    edges: Array<{ from: string; to: string }>;
+    confidence: number;
+  };
+  user_style_observations: Array<{
+    claim: string;
+    confidence: number;
+    evidence: string[];
+  }>;
+}
+
+export interface ProfilePatch {
+  id: string;
+  created_at: string;
+  claim: string;
+  dimension: "style" | "preference" | "workflow" | "avoidance" | "domain";
+  confidence: number;
+  evidence_refs: string[];
+  status: "draft" | "approved" | "rejected";
+}
+
+export interface ArtifactRecord {
+  artifact_id: string;
+  type: "report" | "image" | "prompt" | "night-run" | "context";
+  created_at: string;
+  path: string;
+  source_data_hash: string;
+  real_data_only: boolean;
+  metadata: Record<string, unknown>;
+}
+
+export interface AgentContext {
+  schema_version: number;
+  generated_at: string;
+  project_id: string;
+  task_summary: string;
+  user_style: {
+    communication: string[];
+    workflow: string[];
+    avoid: string[];
+  };
+  relevant_workflows: Array<{
+    name: string;
+    steps: string[];
+    confidence: number;
+    evidence_refs: string[];
+  }>;
+  recommended_agent_behavior: string[];
+  safety_policy: {
+    default_apply: boolean;
+    requires_explicit_apply: boolean;
+    allowed_write_roots: string[];
+    blocked_patterns: string[];
+  };
+  data_quality: {
+    sample_count: number;
+    confidence: number;
+    warnings: string[];
+  };
 }
 
 export interface NmsConfig {
@@ -116,11 +204,18 @@ export interface StateLogEntry {
   artifacts_ref: string;
 }
 
+export interface PolicyLogEntry {
+  name: string;
+  status: "pass" | "warn" | "block";
+  reason: string;
+}
+
 export interface NightReport {
   dry_run: boolean;
   final_state: State;
   retries: number;
   logs: string[];
+  policy_logs?: PolicyLogEntry[];
   state_logs?: StateLogEntry[];
   explain_chain?: string[];
   failure?: FailureModel;

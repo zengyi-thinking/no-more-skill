@@ -1,10 +1,13 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { execSync } from "node:child_process";
 import { DEFAULT_CONFIG } from "../config.js";
 import type {
   ExecutorOutput,
   FailureModel,
   NightReport,
+  PolicyLogEntry,
   PlannerOutput,
   ReviewerOutput,
   State,
@@ -38,6 +41,10 @@ function shellSafeJoinPaths(files: string[]): string {
   return files.map((f) => `"${f.replaceAll('"', '\\"')}"`).join(" ");
 }
 
+function shellQuote(value: string): string {
+  return JSON.stringify(value);
+}
+
 function plannerFromInput(input?: PlannerOutput): PlannerOutput {
   if (!input) {
     throw new Error("Missing planner input. Provide --task-file for night run.");
@@ -64,7 +71,9 @@ function executor(plan: PlannerOutput, cwd: string): ExecutorOutput {
 }
 
 function tester(plan: PlannerOutput, cwd: string): TesterOutput {
-  if (plan.test_plan.length === 0) return { passed: true, errors: [] };
+  if (plan.test_plan.length === 0) {
+    return { passed: false, errors: ["Test phase cannot be skipped: test_plan must include at least one command."] };
+  }
   const errors: string[] = [];
   for (const command of plan.test_plan) {
     try {
@@ -119,14 +128,38 @@ function currentBranch(cwd: string): string {
 
 function commitTask(message: string, files: string[], cwd: string): void {
   const branch = gitBranchName();
-  execSync(`git checkout -B ${branch}`, { cwd, stdio: "pipe" });
-  const paths = shellSafeJoinPaths(files);
-  execSync(`git add -- ${paths}`, { cwd, stdio: "pipe" });
-  execSync(`git commit -m "night: ${message.slice(0, 80)}"`, { cwd, stdio: "pipe" });
+  const safeBranch = branch.replaceAll("/", "-");
+  const worktree = path.join(os.tmpdir(), `nms-${safeBranch}-${Date.now()}`);
+  execSync(`git worktree add -B ${branch} ${shellQuote(worktree)} HEAD`, { cwd, stdio: "pipe" });
+  try {
+    for (const file of files) {
+      const source = path.resolve(cwd, file);
+      if (!fs.existsSync(source) || fs.statSync(source).isDirectory()) continue;
+      const target = path.resolve(worktree, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+    }
+    const paths = shellSafeJoinPaths(files);
+    execSync(`git add -- ${paths}`, { cwd: worktree, stdio: "pipe" });
+    try {
+      execSync("git diff --cached --quiet", { cwd: worktree, stdio: "pipe" });
+      throw new Error("No changes to commit in isolated worktree.");
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("No changes to commit")) throw error;
+    }
+    execSync(`git commit -m "night: ${message.slice(0, 80)}"`, { cwd: worktree, stdio: "pipe" });
+  } finally {
+    try {
+      execSync(`git worktree remove --force ${shellQuote(worktree)}`, { cwd, stdio: "pipe" });
+    } catch {
+      // Worktree cleanup failure should not trigger destructive cleanup.
+    }
+  }
 }
 
-function rollback(cwd: string): void {
-  execSync("git reset --hard HEAD", { cwd, stdio: "pipe" });
+function rollback(_cwd: string): void {
+  // Production safety: this harness must never reset the user's working tree.
+  // Real apply work should happen in an isolated worktree or via scoped patches.
 }
 
 export interface NightOptions {
@@ -142,6 +175,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
   const cwd = opts.cwd ?? process.cwd();
   const logs: string[] = [];
   const stateLogs: StateLogEntry[] = [];
+  const policyLogs: PolicyLogEntry[] = [];
   const explainChain: string[] = [];
   let retries = 0;
   const started = Date.now();
@@ -156,6 +190,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
       final_state: S.ROLLBACK,
       retries,
       logs: [message],
+      policy_logs: policyLogs,
       state_logs: stateLogs,
       explain_chain: opts.explain ? explainChain : undefined,
       failure: makeFailure("CONFIG_ERROR", message, "Provide a valid --task-file JSON.", 0, true, S.PLAN, "task-file")
@@ -170,17 +205,20 @@ export function runNightHarness(opts: NightOptions): NightReport {
       final_state: S.ROLLBACK,
       retries,
       logs: [...logs, "Cannot use --apply with --dry-run at the same time."],
+      policy_logs: policyLogs,
       state_logs: stateLogs,
       explain_chain: opts.explain ? explainChain : undefined,
       failure: makeFailure("CONFIG_ERROR", "Conflicting flags", "Use either --dry-run or --apply", 0, true, S.PLAN, "flags")
     };
   }
   if (opts.apply && !isGitRepo(cwd)) {
+    policyLogs.push({ name: "git_repository_guard", status: "block", reason: "not a git repository" });
     return {
       dry_run: false,
       final_state: S.ROLLBACK,
       retries,
       logs: [...logs, "Current directory is not a git repository."],
+      policy_logs: policyLogs,
       state_logs: stateLogs,
       explain_chain: opts.explain ? explainChain : undefined,
       failure: makeFailure("CONFIG_ERROR", "Not a git repository", "Initialize git repository first.", 0, true, S.PLAN, cwd)
@@ -205,6 +243,11 @@ export function runNightHarness(opts: NightOptions): NightReport {
     logs.push(`State=${state}`);
     const execOut = executor(plan, cwd);
     const guard = validateWriteScope(execOut.files_modified, DEFAULT_CONFIG);
+    policyLogs.push({
+      name: "write_scope_guard",
+      status: guard.ok ? "pass" : "block",
+      reason: guard.reason ?? "all files inside allowed roots and file types"
+    });
     stateLogs.push({
       state,
       input_summary: `${execOut.files_modified.length} files`,
@@ -219,6 +262,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
         final_state: S.ROLLBACK,
         retries,
         logs,
+        policy_logs: policyLogs,
         state_logs: stateLogs,
         explain_chain: opts.explain ? explainChain : undefined,
         failure: makeFailure(
@@ -281,16 +325,19 @@ export function runNightHarness(opts: NightOptions): NightReport {
           final_state: S.GATE,
           retries,
           logs,
+          policy_logs: policyLogs,
           state_logs: stateLogs,
           explain_chain: opts.explain ? explainChain : undefined
         };
       }
       if (currentBranch(cwd) === "main") {
+        policyLogs.push({ name: "main_branch_guard", status: "block", reason: "main branch commit forbidden" });
         return {
           dry_run: false,
           final_state: S.ROLLBACK,
           retries,
           logs: [...logs, "Apply blocked on main branch."],
+          policy_logs: policyLogs,
           state_logs: stateLogs,
           explain_chain: opts.explain ? explainChain : undefined,
           failure: makeFailure(
@@ -304,12 +351,15 @@ export function runNightHarness(opts: NightOptions): NightReport {
           )
         };
       }
+      policyLogs.push({ name: "isolated_worktree_guard", status: "pass", reason: "apply commit runs in a temporary git worktree" });
       commitTask(plan.task, plan.files, cwd);
+      policyLogs.push({ name: "commit_guard", status: "pass", reason: "tests and reviews passed" });
       return {
         dry_run: false,
         final_state: S.COMMIT,
         retries,
         logs,
+        policy_logs: policyLogs,
         state_logs: stateLogs,
         explain_chain: opts.explain ? explainChain : undefined
       };
@@ -323,6 +373,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
         final_state: S.ROLLBACK,
         retries,
         logs,
+        policy_logs: policyLogs,
         state_logs: stateLogs,
         explain_chain: opts.explain ? explainChain : undefined,
         failure: makeFailure(
@@ -343,6 +394,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
     final_state: S.ROLLBACK,
     retries,
     logs,
+    policy_logs: policyLogs,
     state_logs: stateLogs,
     explain_chain: opts.explain ? explainChain : undefined,
     failure: makeFailure(

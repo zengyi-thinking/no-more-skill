@@ -1,12 +1,14 @@
 {
   "name": "no-more-skill",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "NMS: behavior engineering + execution harness",
   "type": "module",
   "main": "dist/index.js",
   "files": [
     "dist/**",
+    "!dist/releases/**",
     "skills/**",
+    "agents/**",
     ".claude-plugin/**",
     "SKILL.md",
     "README.md",

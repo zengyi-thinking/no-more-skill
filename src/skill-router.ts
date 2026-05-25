@@ -1,4 +1,5 @@
 import {
+  contextCommand,
   doctorCommand,
   flowCommand,
   flowVisualCommand,
@@ -44,6 +45,7 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     "NMS Skill Commands:",
     "- /nms [flow|ingest|replay|night|doctor|report] [flags]",
     "- /nms-flow [--format human|json] [--visual]",
+    "- /nms-context --task <task> [--format json]",
     "- /nms-ingest --input <file>",
     "- /nms-replay",
     "- /nms-night --dry-run --task-file <task.json> [--explain]",
@@ -80,7 +82,16 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         const out = flowVisualCommand();
         return `Visual dashboard generated: ${out}`;
       }
-      return flowCommand((args.format as "human" | "json") ?? "human");
+      return flowCommand((args.format as "human" | "json") ?? "human", {
+        domain: args.domain as string | undefined
+      });
+    case "/nms-context":
+      return contextCommand({
+        task: args.task as string | undefined,
+        taskFile: (args["task-file"] as string | undefined) ?? (args.taskFile as string | undefined),
+        format: (args.format as "human" | "json") ?? "human",
+        includeEvidence: toBool(args["include-evidence"]) || toBool(args.includeEvidence)
+      });
     case "/nms-replay":
       return replayCommand();
     case "/nms-night":
@@ -97,7 +108,12 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         outputDir: args["output-dir"] as string | undefined,
         baseUrl: args["base-url"] as string | undefined,
         apiKey: args["api-key"] as string | undefined,
-        model: args.model as string | undefined
+        model: args.model as string | undefined,
+        format: (args.format as "md" | "html" | "json") ?? "md",
+        period: args.period as string | undefined,
+        realOnly: args["real-only"] === undefined && args.realOnly === undefined
+          ? true
+          : toBool(args["real-only"]) || toBool(args.realOnly)
       });
       return `Report generated: ${reportPath}`;
     }

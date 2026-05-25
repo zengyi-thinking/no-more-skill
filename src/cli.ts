@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import {
+  contextCommand,
   doctorCommand,
   flowCommand,
   flowVisualCommand,
@@ -12,7 +13,7 @@ import {
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.2.0");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.3.0");
 
 program
   .command("ingest")
@@ -28,6 +29,7 @@ program
   .description("show professional behavior dashboard")
   .option("--format <type>", "human or json", "human")
   .option("--visual", "generate HTML visual dashboard")
+  .option("--domain <name>", "filter dashboard by behavior domain")
   .action((opts) => {
     if (Boolean(opts.visual)) {
       const outPath = flowVisualCommand();
@@ -35,7 +37,26 @@ program
       return;
     }
     const format = opts.format === "json" ? "json" : "human";
-    process.stdout.write(`${flowCommand(format)}\n`);
+    process.stdout.write(`${flowCommand(format, { domain: opts.domain })}\n`);
+  });
+
+program
+  .command("context")
+  .description("export agent-readable user behavior context")
+  .option("--task <text>", "task summary")
+  .option("--task-file <file>", "task text file")
+  .option("--format <type>", "human or json", "human")
+  .option("--include-evidence", "include evidence refs metadata")
+  .action((opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    process.stdout.write(
+      `${contextCommand({
+        task: opts.task,
+        taskFile: opts.taskFile,
+        format,
+        includeEvidence: Boolean(opts.includeEvidence)
+      })}\n`
+    );
   });
 
 program
@@ -93,13 +114,20 @@ program
   .option("--base-url <url>", "image relay endpoint url")
   .option("--api-key <key>", "image relay API key")
   .option("--model <name>", "image model, default gpt-image-2")
+  .option("--format <type>", "md, html, or json", "md")
+  .option("--period <range>", "report period, e.g. 1d or 7d", "7d")
+  .option("--real-only", "only use real .nms data", true)
   .action(async (opts) => {
+    const format = ["html", "json"].includes(opts.format) ? opts.format : "md";
     const out = await reportCommand({
       image: Boolean(opts.image),
       outputDir: opts.outputDir,
       baseUrl: opts.baseUrl,
       apiKey: opts.apiKey,
-      model: opts.model
+      model: opts.model,
+      format,
+      period: opts.period,
+      realOnly: Boolean(opts.realOnly)
     });
     process.stdout.write(`Report generated: ${out}\n`);
   });

@@ -1,28 +1,32 @@
-# NMS Skill (Codex)
+---
+name: no-more-skill
+description: Behavior learning and safe execution skill for No More Skill (NMS). Use when the user asks to learn preferences from compressed conversations, inspect `.nms` behavior data, visualize skill/workflow frequency, export agent-readable user context, generate real-data reports, or run guarded night automation with dry-run/test/review gates.
+---
+
+# NMS Skill
 
 ## Purpose
 
-Upgrade prompt engineering into behavior engineering plus an execution harness.
+Upgrade prompt engineering into behavior engineering plus a guarded execution system.
 
-## Trigger Cases
-
-- User asks to learn behavior from compressed conversations
-- User asks for workflow visualization or replay
-- User asks to run safe night automation with strong test/review gates
+NMS records real user behavior into `.nms`, derives workflow/profile snapshots, exports compact Agent context, and generates auditable reports. Prefer real `.nms` data; never invent skill frequency or workflow history.
 
 ## Commands
 
 - `npm run dev -- ingest --input <file>`
 - `npm run dev -- flow`
+- `npm run dev -- context --task "<task>" --format json`
 - `npm run dev -- replay`
 - `npm run dev -- night --dry-run --task-file <task.json>`
 - `npm run dev -- night --apply --task-file <task.json>`
-- `npm run dev:skill -- /nms-flow --format json`
+- `npm run dev -- report --format html --real-only`
+- `npm run dev:skill -- /nms-context --task "<task>" --format json`
 
 Slash routes:
 
 - `/nms-ingest`
 - `/nms-flow`
+- `/nms-context`
 - `/nms-replay`
 - `/nms-night`
 - `/nms-doctor`
@@ -30,8 +34,8 @@ Slash routes:
 
 Runtime aliases:
 
-- GSD/Gemini: `/nms:flow`, `/nms:night`, `/nms:report`
-- Codex: `$nms-flow`, `$nms-night`, `$nms-report`
+- GSD/Gemini: `/nms:flow`, `/nms:context`, `/nms:night`, `/nms:report`
+- Codex: `$nms-flow`, `$nms-context`, `$nms-night`, `$nms-report`
 
 Install:
 
@@ -59,12 +63,23 @@ Hook output:
 4. Max retry = 3.
 5. Apply mode is explicit; default is dry-run.
 6. Write guard blocks out-of-scope paths.
+7. Rollback must be non-destructive; never reset the user's full working tree.
+8. Reports and images must use real `.nms` data and record artifacts.
 
 ## Artifacts
 
-- Storage: `.nms/data.json`
-- Session model: `sessions + stats + user_profile`
-- Night logs: JSON report from `nms night`
+- Compatibility store: `.nms/data.json`
+- v3 store: `.nms/events`, `.nms/sessions`, `.nms/derived`, `.nms/artifacts`, `.nms/policies`, `.nms/domains`
+- Agent context: `nms context --format json`
+- Night logs: `.nms/artifacts/night-runs`
+
+## References
+
+- `skills/nms-core/references/AGENT_PROTOCOL.md` for how Agents should call NMS.
+- `skills/nms-core/references/DATA_MODEL.md` for `.nms` v3 storage rules.
+- `skills/nms-core/references/SAFETY.md` for apply and rollback boundaries.
+- `skills/nms-core/references/REPORTING.md` for report/image artifact rules.
+- `skills/nms-core/references/DOMAIN_PACKS.md` for non-coding expansion.
 
 ## Promotion Notes
 

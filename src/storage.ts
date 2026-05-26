@@ -9,10 +9,16 @@ import type {
   SessionRecord,
   SessionV3,
   SourceToolName,
+  DomainPack,
   UserProfile
 } from "./types.js";
 import { DEFAULT_CONFIG } from "./config.js";
-import { skillCategory } from "./hook/skillDictionary.js";
+import {
+  categoryForSkill,
+  DEFAULT_DOMAIN_PACKS,
+  detectDomainFromText,
+  detectSessionDomain
+} from "./hook/domainPacks.js";
 
 const PERF_WINDOW_SIZE = 100;
 
@@ -22,6 +28,7 @@ const DEFAULT_DB: Database = {
   stats: {
     skill_counts: {},
     workflow_counts: {},
+    domain_counts: {},
     last_updated: new Date(0).toISOString(),
     ingest_count: 0,
     perf_windows: {
@@ -46,77 +53,20 @@ const DEFAULT_DB: Database = {
   }
 };
 
-const DEFAULT_DOMAINS: Record<string, unknown>[] = [
-  {
-    domain: "coding",
-    skills: {
-      "分析类": ["PRD分析", "代码分析"],
-      "生成类": ["UI生成", "代码生成"],
-      "优化类": ["Prompt优化", "性能优化"],
-      "调试类": ["Debug"],
-      "设计类": ["架构设计"]
-    },
-    workflow_templates: [["PRD分析", "代码分析", "代码生成", "Debug"]],
-    style_signals: [{ name: "结构化推进", patterns: ["先", "再", "最后", "测试"] }]
-  },
-  {
-    domain: "writing",
-    skills: {
-      "分析类": ["选题分析", "读者分析"],
-      "生成类": ["大纲生成", "草稿生成"],
-      "优化类": ["标题优化", "结构优化"],
-      "发布类": ["平台适配", "发布复盘"]
-    },
-    workflow_templates: [["选题分析", "大纲生成", "草稿生成", "结构优化", "发布复盘"]],
-    style_signals: [{ name: "结构化表达", patterns: ["先", "再", "最后", "分步骤"] }]
-  },
-  {
-    domain: "research",
-    skills: {
-      "分析类": ["问题定义", "资料收集"],
-      "验证类": ["交叉验证", "来源评估"],
-      "生成类": ["结论归纳", "研究报告"]
-    },
-    workflow_templates: [["问题定义", "资料收集", "交叉验证", "结论归纳"]],
-    style_signals: [{ name: "证据优先", patterns: ["来源", "证据", "验证", "引用"] }]
-  },
-  {
-    domain: "learning",
-    skills: {
-      "规划类": ["学习目标", "资料选择"],
-      "执行类": ["练习", "反馈"],
-      "复盘类": ["学习复盘"]
-    },
-    workflow_templates: [["学习目标", "资料选择", "练习", "反馈", "学习复盘"]],
-    style_signals: [{ name: "迭代学习", patterns: ["练习", "反馈", "复盘"] }]
-  },
-  {
-    domain: "product",
-    skills: {
-      "分析类": ["需求分析", "用户分析"],
-      "设计类": ["原型设计", "文案设计"],
-      "发布类": ["演示", "推广"]
-    },
-    workflow_templates: [["需求分析", "用户分析", "原型设计", "演示", "推广"]],
-    style_signals: [{ name: "产品交付", patterns: ["用户", "场景", "推广", "演示"] }]
-  },
-  {
-    domain: "content",
-    skills: {
-      "创作类": ["口播", "分镜"],
-      "视觉类": ["页面", "图片"],
-      "发布类": ["发布", "复盘"]
-    },
-    workflow_templates: [["口播", "分镜", "页面", "图片", "发布"]],
-    style_signals: [{ name: "内容生产", patterns: ["口播", "分镜", "视频", "发布"] }]
-  }
-];
-
 function atomicWrite(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, content, "utf8");
-  fs.renameSync(tmp, filePath);
+  try {
+    fs.renameSync(tmp, filePath);
+  } catch (error) {
+    if (fs.existsSync(filePath)) {
+      fs.rmSync(filePath, { force: true });
+      fs.renameSync(tmp, filePath);
+      return;
+    }
+    throw error;
+  }
 }
 
 function sha256(input: string): string {
@@ -144,16 +94,6 @@ function workflowConfidence(session: SessionRecord): number {
   return Number(Math.min(1, session.workflow.length / Math.max(1, session.skills_used.length)).toFixed(3));
 }
 
-function detectDomain(session: SessionRecord): string {
-  const text = `${session.compressed_text}\n${session.conversation}`.toLowerCase();
-  if (/写作|文章|标题|大纲|草稿|发布/.test(text)) return "writing";
-  if (/研究|资料|来源|引用|验证|论文/.test(text)) return "research";
-  if (/学习|课程|练习|复盘|掌握/.test(text)) return "learning";
-  if (/产品|用户|需求|原型|推广|演示/.test(text)) return "product";
-  if (/口播|分镜|视频|图片|内容/.test(text)) return "content";
-  return "coding";
-}
-
 function relativeToRoot(root: string, filePath: string): string {
   return path.relative(root, filePath).replaceAll("\\", "/");
 }
@@ -163,15 +103,18 @@ function pushWindowMetric(target: number[], value: number, max: number): number[
   return next.length <= max ? next : next.slice(next.length - max);
 }
 
-function computeStatsFromSessions(sessions: SessionRecord[]): Pick<Database["stats"], "skill_counts" | "workflow_counts"> {
+function computeStatsFromSessions(sessions: SessionRecord[]): Pick<Database["stats"], "skill_counts" | "workflow_counts" | "domain_counts"> {
   const skill_counts: Record<string, number> = {};
   const workflow_counts: Record<string, number> = {};
+  const domain_counts: Record<string, number> = {};
   for (const s of sessions) {
     for (const skill of s.skills_used) skill_counts[skill] = (skill_counts[skill] ?? 0) + 1;
     const wfKey = s.workflow.join(" -> ");
     if (wfKey) workflow_counts[wfKey] = (workflow_counts[wfKey] ?? 0) + 1;
+    const domain = s.domain ?? "coding";
+    domain_counts[domain] = (domain_counts[domain] ?? 0) + 1;
   }
-  return { skill_counts, workflow_counts };
+  return { skill_counts, workflow_counts, domain_counts };
 }
 
 function computeQualityMetrics(db: Database): Database["stats"]["quality_metrics"] {
@@ -253,6 +196,7 @@ export class JsonStorage {
     const stats = computeStatsFromSessions(db.sessions);
     db.stats.skill_counts = stats.skill_counts;
     db.stats.workflow_counts = stats.workflow_counts;
+    db.stats.domain_counts = stats.domain_counts;
     db.stats.ingest_count += 1;
     db.stats.last_updated = new Date().toISOString();
     db.stats.perf_windows.ingest_ms = pushWindowMetric(
@@ -289,6 +233,26 @@ export class JsonStorage {
     const db = this.load();
     const [top] = Object.entries(db.stats.workflow_counts).sort((a, b) => b[1] - a[1]);
     return top ? top[0].split(" -> ") : [];
+  }
+
+  loadDomainPacks(): DomainPack[] {
+    const domainDir = path.join(this.root, "domains");
+    if (!fs.existsSync(domainDir)) return DEFAULT_DOMAIN_PACKS;
+    const packs = fs
+      .readdirSync(domainDir)
+      .filter((entry) => entry.endsWith(".json"))
+      .map((entry) => path.join(domainDir, entry))
+      .map((file) => {
+        try {
+          return JSON.parse(fs.readFileSync(file, "utf8")) as DomainPack;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((pack): pack is DomainPack =>
+        Boolean(pack?.domain && pack.skills && pack.workflow_templates && pack.style_signals)
+      );
+    return packs.length > 0 ? packs : DEFAULT_DOMAIN_PACKS;
   }
 
   findDuplicateSession(db: Database, input: Pick<SessionRecord, "tool" | "compressed_text" | "conversation">): SessionRecord | undefined {
@@ -361,6 +325,7 @@ export class JsonStorage {
   buildAgentContext(taskSummary = ""): AgentContext {
     const db = this.load();
     const topWorkflowEntries = Object.entries(db.stats.workflow_counts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const topDomainEntries = Object.entries(db.stats.domain_counts).sort((a, b) => b[1] - a[1]).slice(0, 4);
     const totalSessions = Math.max(1, db.sessions.length);
     const style = db.user_profile.style === "unknown" ? [] : db.user_profile.style.split("+").map((v) => v.trim());
     const warnings: string[] = [];
@@ -385,6 +350,11 @@ export class JsonStorage {
           .filter((s) => s.workflow.join(" -> ") === name)
           .slice(0, 3)
           .map((s) => s.id)
+      })),
+      relevant_domains: topDomainEntries.map(([name, count]) => ({
+        name,
+        count,
+        confidence: Number((count / totalSessions).toFixed(3))
       })),
       recommended_agent_behavior: [
         "先说明将读取哪些真实数据和将写入哪些文件。",
@@ -436,8 +406,8 @@ export class JsonStorage {
       patterns: ["Bearer <token>", "sk-<secret>", "api_key=<secret>", "token=<secret>"]
     });
     this.writeIfMissing(path.join("artifacts", "artifacts.json"), []);
-    for (const domain of DEFAULT_DOMAINS) {
-      const name = String((domain as { domain: string }).domain);
+    for (const domain of DEFAULT_DOMAIN_PACKS) {
+      const name = domain.domain;
       this.writeIfMissing(path.join("domains", `${name}.json`), domain);
     }
   }
@@ -480,17 +450,22 @@ export class JsonStorage {
 
   private toSessionV3(session: SessionRecord): SessionV3 {
     const source = `${session.compressed_text}\n${session.conversation}`;
+    const packs = this.loadDomainPacks();
+    const domainGuess = session.domain
+      ? { domain: session.domain, confidence: session.domain_confidence ?? 1 }
+      : detectDomainFromText(source, packs);
     return {
       id: session.id,
       created_at: session.created_at,
       project_id: this.projectId(),
-      domain: detectDomain(session),
+      domain: domainGuess.domain,
+      domain_confidence: domainGuess.confidence,
       source_tool: session.tool as SourceToolName,
       compressed_text_ref: "inline:redacted",
       conversation_ref: "inline:redacted",
       skills: session.skills_used.map((name) => ({
         name,
-        category: skillCategory(name),
+        category: categoryForSkill(name, packs),
         confidence: 1,
         evidence: compactEvidence(source, name)
       })),
@@ -535,6 +510,10 @@ export class JsonStorage {
       .sort((a, b) => b[1] - a[1])
       .map(([name, count]) => ({ name, steps: name.split(" -> "), count }));
     atomicWrite(path.join(this.root, "derived", "workflows.json"), JSON.stringify(workflows, null, 2));
+    const domains = Object.entries(db.stats.domain_counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => ({ name, count }));
+    atomicWrite(path.join(this.root, "derived", "domains.json"), JSON.stringify(domains, null, 2));
     atomicWrite(path.join(this.root, "derived", "agent-context.json"), JSON.stringify(this.buildAgentContext(), null, 2));
   }
 
@@ -570,7 +549,9 @@ export class JsonStorage {
         skills_used: session.skills.map((skill) => skill.name),
         workflow: session.workflow.steps,
         edges: session.workflow.edges,
-        user_style: session.user_style_observations[0]?.claim ?? "unknown"
+        user_style: session.user_style_observations[0]?.claim ?? "unknown",
+        domain: session.domain,
+        domain_confidence: session.domain_confidence
       }))
       .sort((a, b) => (a.created_at > b.created_at ? 1 : -1));
     const stats = computeStatsFromSessions(sessions);
@@ -590,6 +571,7 @@ export class JsonStorage {
     db.sessions = sessions;
     db.stats.skill_counts = stats.skill_counts;
     db.stats.workflow_counts = stats.workflow_counts;
+    db.stats.domain_counts = stats.domain_counts;
     db.stats.ingest_count = sessions.length;
     db.stats.last_updated = new Date().toISOString();
     db.user_profile = profile;
@@ -603,7 +585,8 @@ export class JsonStorage {
       sessions: (input.sessions ?? []).map((session) => ({
         ...session,
         compressed_text: redactText(session.compressed_text ?? ""),
-        conversation: redactText(session.conversation ?? "")
+        conversation: redactText(session.conversation ?? ""),
+        domain: session.domain ?? detectSessionDomain(session as SessionRecord, DEFAULT_DOMAIN_PACKS)
       })),
       stats: {
         ...DEFAULT_DB.stats,
@@ -622,10 +605,11 @@ export class JsonStorage {
         ...(input.user_profile ?? {})
       }
     };
-    if ((input.schema_version ?? 1) < 3) {
+    if ((input.schema_version ?? 1) < 3 || !input.stats?.domain_counts) {
       const stats = computeStatsFromSessions(merged.sessions);
       merged.stats.skill_counts = stats.skill_counts;
       merged.stats.workflow_counts = stats.workflow_counts;
+      merged.stats.domain_counts = stats.domain_counts;
       merged.stats.quality_metrics = computeQualityMetrics(merged);
     }
     return merged;

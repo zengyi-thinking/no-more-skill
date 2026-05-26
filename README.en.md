@@ -19,6 +19,7 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 2. Safety-first defaults: dry-run, retry cap, write whitelist, branch guard.
 3. It converges over time: main workflows become clearer and reusable.
 4. It is explainable: `nms night --explain` shows why gate passed or rolled back.
+5. It is not limited to coding: domain packs let writing, research, learning, product, content, or your own domains use the same behavior model.
 
 ## Core Commands
 
@@ -29,6 +30,19 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 - `nms night`: guarded night loop (default dry-run)
 - `nms doctor`: read-only diagnostics
 - `nms report`: real-data report generation in Markdown/HTML/JSON (optional image rendering)
+
+## Domain Packs
+
+NMS reads `.nms/domains/*.json` as real behavior domain packs. Built-ins include:
+
+- `coding`: code analysis, UI generation, code generation, debugging, architecture design
+- `writing`: topic analysis, reader analysis, outlining, drafting, title optimization, publishing review
+- `research`: problem definition, source collection, cross-checking, source evaluation, synthesis
+- `learning`: learning goals, material selection, practice, feedback, review
+- `product`: requirements, user analysis, prototype design, copywriting, demos, launch
+- `content`: scripts, storyboards, pages, images, publishing, review
+
+You can add your own pack such as `.nms/domains/fitness.json`. When compressed context contains those skills, `ingest` stores the detected domain and `flow --domain fitness` plus `report` use it in real stats.
 
 ## Local `.nms` Data Layer
 
@@ -119,11 +133,18 @@ npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- flow --format json
 npm run dev -- context --task "generate weekly project report" --format json
+npm run dev -- flow --visual
 npm run dev -- replay
 npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
 npm run dev -- doctor
 npm run dev -- report --format html --real-only
 ```
+
+## Output Experience
+
+- `nms flow --visual` creates `.nms/flow-dashboard.html` with domain mix, skill frequency, main workflow path, and workflow edges.
+- `nms context --format json` includes relevant domains, workflows, avoid-list, and safety policy for other Agents.
+- `nms report --format html --real-only` generates a product-style cockpit report with domain distribution, skill usage, workflow graph, user style, and next commands.
 
 ## Safety Boundaries
 

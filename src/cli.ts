@@ -13,7 +13,7 @@ import {
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.3.0");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.3.1");
 
 program
   .command("ingest")

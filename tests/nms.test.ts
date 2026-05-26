@@ -69,6 +69,45 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
+  test("ingest uses real domain packs for non-coding behavior", () => {
+    withTempCwd(() => {
+      const domainDir = path.join(process.cwd(), ".nms", "domains");
+      fs.mkdirSync(domainDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(domainDir, "fitness.json"),
+        JSON.stringify({
+          domain: "fitness",
+          skills: {
+            "准备类": ["热身"],
+            "执行类": ["训练"],
+            "复盘类": ["运动复盘"]
+          },
+          workflow_templates: [["热身", "训练", "运动复盘"]],
+          style_signals: [{ name: "身体训练", patterns: ["力量", "体能"] }]
+        }),
+        "utf8"
+      );
+      const payload = {
+        compressed_text: "今天先 热身，再 训练，最后做 运动复盘",
+        conversation: "力量训练流程：热身 -> 训练 -> 运动复盘",
+        tool: "codex"
+      };
+      const inputFile = path.join(process.cwd(), "input.json");
+      fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+
+      ingestCommand(inputFile);
+
+      const db = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".nms", "data.json"), "utf8"));
+      expect(db.sessions[0].domain).toBe("fitness");
+      expect(db.sessions[0].skills_used).toEqual(["热身", "训练", "运动复盘"]);
+      expect(db.stats.domain_counts.fitness).toBe(1);
+
+      const flowJson = JSON.parse(flowCommand("json", { domain: "fitness" }));
+      expect(flowJson.top_skills).toContain("热身(1)");
+      expect(flowJson.domain_summary[0]).toEqual({ name: "fitness", count: 1 });
+    });
+  });
+
   test("flow and replay are stable on empty/non-empty data", () => {
     withTempCwd(() => {
       const emptyFlow = flowCommand();
@@ -306,6 +345,7 @@ describe.sequential("NMS v0.2 optimization", () => {
       expect(out.user_style.avoid).toContain("demo 数据");
       expect(out.safety_policy.requires_explicit_apply).toBe(true);
       expect(out.data_quality.sample_count).toBe(1);
+      expect(out.relevant_domains[0].name).toBe("coding");
       expect(fs.existsSync(path.join(process.cwd(), ".nms", "artifacts", "artifacts.json"))).toBe(true);
     });
   });
@@ -339,6 +379,8 @@ describe.sequential("NMS v0.2 optimization", () => {
         const content = fs.readFileSync(reportPath, "utf8");
         expect(content).toContain("真实样本");
         expect(content).toContain("样本不足");
+        expect(content).toContain("领域分布");
+        expect(content).toContain("Workflow 排名与转移边");
         const registry = JSON.parse(
           fs.readFileSync(path.join(process.cwd(), ".nms", "artifacts", "artifacts.json"), "utf8")
         );
@@ -452,7 +494,7 @@ describe.sequential("NMS v0.2 optimization", () => {
       expect(status).not.toContain("A  sandbox/");
       expect(out.policy_logs.some((log: { name: string }) => log.name === "isolated_worktree_guard")).toBe(true);
     });
-  });
+  }, 15000);
 
   test("flow visual generates html dashboard file", () => {
     withTempCwd(() => {

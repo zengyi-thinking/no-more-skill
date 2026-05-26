@@ -17,6 +17,18 @@ export interface HookOutput {
 export interface SessionRecord extends HookInput, HookOutput {
   id: string;
   created_at: string;
+  domain?: string;
+  domain_confidence?: number;
+}
+
+export interface DomainPack {
+  domain: string;
+  skills: Record<string, string[]>;
+  workflow_templates: string[][];
+  style_signals: Array<{
+    name: string;
+    patterns: string[];
+  }>;
 }
 
 export interface UserProfile {
@@ -29,6 +41,7 @@ export interface UserProfile {
 export interface Stats {
   skill_counts: Record<string, number>;
   workflow_counts: Record<string, number>;
+  domain_counts: Record<string, number>;
   last_updated: string;
   ingest_count: number;
   perf_windows: {
@@ -69,6 +82,7 @@ export interface SessionV3 {
   created_at: string;
   project_id: string;
   domain: string;
+  domain_confidence?: number;
   source_tool: SourceToolName;
   compressed_text_ref?: string;
   conversation_ref?: string;
@@ -125,6 +139,11 @@ export interface AgentContext {
     steps: string[];
     confidence: number;
     evidence_refs: string[];
+  }>;
+  relevant_domains: Array<{
+    name: string;
+    count: number;
+    confidence: number;
   }>;
   recommended_agent_behavior: string[];
   safety_policy: {

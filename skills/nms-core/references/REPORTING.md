@@ -14,8 +14,10 @@ nms report --period 7d --format html --image
 ## Required Sections
 
 - Sample count and data period.
+- Domain mix.
 - Skill frequency.
 - Workflow path ranking.
+- Workflow transition edges.
 - Behavior score and workflow confidence.
 - Current user style.
 - Risks and stale skills.
@@ -32,3 +34,15 @@ Before calling any image backend:
 5. Register both prompt and image in `.nms/artifacts/artifacts.json`.
 
 If real samples are insufficient, the report and prompt must say so. Do not fill missing metrics with demo values.
+
+## HTML Cockpit Requirements
+
+The HTML report should feel like a product cockpit, not a plain table:
+
+- Hero summary with period and sample count.
+- Metric cards for behavior score, confidence, and stale risk.
+- Domain distribution bars.
+- Skill frequency bars.
+- Main workflow path.
+- Workflow edge chips.
+- Source note that data came from `.nms/sessions` and `.nms/derived`.

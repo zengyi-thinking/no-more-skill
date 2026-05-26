@@ -4,6 +4,7 @@ import type { HookInput, HookOutput } from "../types.js";
 import { cleanSessions } from "./cleaner.js";
 import { extractSkills } from "./extractor.js";
 import { buildUserProfile } from "./profile.js";
+import { detectDomainFromText, domainPackFor } from "./domainPacks.js";
 import { buildEdges, buildWorkflow } from "./workflow.js";
 
 export function processCompressedEvent(input: HookInput, storage = new JsonStorage()): HookOutput {
@@ -20,8 +21,11 @@ export function processCompressedEvent(input: HookInput, storage = new JsonStora
   }
 
   const mergedText = `${input.compressed_text}\n${input.conversation}`;
-  const skills = extractSkills(mergedText);
-  const workflow = buildWorkflow(mergedText, skills);
+  const domainPacks = storage.loadDomainPacks();
+  const domainGuess = detectDomainFromText(mergedText, domainPacks);
+  const activeDomainPack = domainPackFor(domainGuess.domain, domainPacks);
+  const skills = extractSkills(mergedText, domainPacks);
+  const workflow = buildWorkflow(mergedText, skills, activeDomainPack.workflow_templates);
   const baseOutput: HookOutput = {
     skills_used: skills,
     workflow,
@@ -34,6 +38,8 @@ export function processCompressedEvent(input: HookInput, storage = new JsonStora
     compressed_text: redactText(input.compressed_text),
     conversation: redactText(input.conversation),
     ...baseOutput,
+    domain: domainGuess.domain,
+    domain_confidence: domainGuess.confidence,
     id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     created_at: new Date().toISOString()
   };

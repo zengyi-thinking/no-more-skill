@@ -18,6 +18,7 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 2. 它默认安全：`dry-run`、重试上限、写入白名单、分支保护。
 3. 它越来越懂你：会形成主 workflow、给出下一步行动建议。
 4. 它可审计：night 模式支持 `--explain`，清楚告诉你为什么通过/回滚。
+5. 它不只服务编程：`domain pack` 能把写作、研究、学习、产品、内容创作等场景接入同一套行为模型。
 
 ## 核心能力
 
@@ -28,6 +29,19 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `nms night`: 受控夜间执行（默认 dry-run，`--explain` 可解释判定链）
 - `nms doctor`: 只读健康诊断（数据完整性、schema、git 安全状态）
 - `nms report`: 生成真实使用周报（支持 Markdown/HTML/JSON，可选出图）
+
+## 领域扩展：不只 Coding
+
+NMS 会读取 `.nms/domains/*.json` 作为真实领域包。默认内置：
+
+- `coding`：代码分析、UI 生成、代码生成、Debug、架构设计
+- `writing`：选题分析、读者分析、大纲生成、草稿生成、标题优化、发布复盘
+- `research`：问题定义、资料收集、交叉验证、来源评估、结论归纳
+- `learning`：学习目标、资料选择、练习、反馈、学习复盘
+- `product`：需求分析、用户分析、原型设计、文案设计、演示、推广
+- `content`：口播、分镜、页面、图片、发布、复盘
+
+你可以新增自己的领域包，例如 `.nms/domains/fitness.json`。只要压缩上下文里出现对应 skill，`ingest` 就会把它识别为真实领域数据，`flow --domain fitness` 和 `report` 会自动纳入统计。
 
 ## `.nms` 本地数据层
 
@@ -147,13 +161,18 @@ npm run dev -- report --format html --real-only
 
 `nms flow --visual`：
 - 生成本地 HTML 图表面板：`.nms/flow-dashboard.html`
+- 展示领域分布、技能频率、主 workflow 路径和 workflow 转移边
 
 `nms context --format json`：
 - 输出用户沟通风格、常用 workflow、禁忌项、安全策略
+- 输出 relevant domains，便于 Agent 判断当前任务更像 coding、writing、research 还是其他领域
 - 适合 Agent 在执行任务前读取，而不是直接解析 `.nms` 内部文件
 
-`nms report --image`：
+`nms report --format html --real-only`：
 - 默认生成 `.nms/artifacts/reports/latest/report.md` 或 `report.html`
+- HTML 报告包含领域分布、skill 频率、主 workflow 路径、workflow 边、用户风格和下一步命令
+
+`nms report --image`：
 - 调用你配置的中转站（默认模型 `gpt-image-2`）输出三张图：
   - `skill-frequency.png`
   - `work-progress.png`

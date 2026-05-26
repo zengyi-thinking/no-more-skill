@@ -92,6 +92,7 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 | Claude 插件市场 | Claude Code 用户 | `/plugin marketplace add zengyi-thinking/no-more-skill` |
 | 本地开发安装 | 调试/二次开发 | `npm install && npm run build && npm link` |
 | 固定版本 Zip | CI/可复现安装 | `npm run release:pack` 生成 `dist/releases/*.zip`（包含 marketplace + skill） |
+| 宿主命令修复 | `/nms` 没出现时 | `nms hosts --write-commands` 后重启 Claude Code/OpenCode |
 
 ### Skill 调用格式（Slash Route）
 
@@ -101,8 +102,9 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 - `/nms-report`
 - `/nms-auto`
 - `/nms-birthday`
+- `/nms`（30 秒上手入口）
 
-这三个命令会自动调用内部能力。比如 `/nms-auto` 会透明使用 brief、suggest、guard 和 night gate；用户不需要记住这些内部步骤。
+这四个命令会自动调用内部能力。比如 `/nms-auto` 会透明使用 brief、suggest、guard 和 night gate；用户不需要记住这些内部步骤。
 
 如果你的宿主环境偏好 GSD 风格 `/<skill>:<function>`，也同样支持：
 
@@ -124,9 +126,19 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 
 | Runtime | 命令风格 |
 |---|---|
-| Claude/Cursor/OpenCode | `/nms-flow` |
+| Claude Code/OpenCode | `/nms`、`/nms-flow` |
 | GSD/Gemini 风格 | `/nms:flow` |
 | Codex 风格 | `$nms-flow` |
+
+如果安装后 `/nms` 没有出现在快速命令里，先执行一次宿主诊断：
+
+```bash
+nms hosts
+nms hosts --probe
+nms hosts --write-commands
+```
+
+`hosts --probe` 会做宿主健康探测；在 Windows 下，Claude Code 会执行真实的 `--version`，Codex/OpenCode 会改用更稳的安装态检查，避免把已安装宿主误判为异常。`hosts --write-commands` 会生成 Claude Code 的 `~/.claude/commands/nms.md` 和 OpenCode 的 `~/.config/opencode/command/nms.md`。Codex 不需要额外 slash 文件，安装 skill 后用 `$nms-flow`、`$nms-report`、`$nms-auto`、`$nms-birthday` 或直接提到 `no-more-skill` 即可。
 
 本地入口命令：
 

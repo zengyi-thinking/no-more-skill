@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { runSkillRoute } from "./skill-router.js";
+import { onboardingCommand } from "./commands.js";
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const out: Record<string, string | boolean> = {};
@@ -20,8 +21,8 @@ function parseArgs(argv: string[]): Record<string, string | boolean> {
 
 const slashCommand = process.argv[2];
 if (!slashCommand) {
-  process.stderr.write("Usage: nms-skill /nms-flow [--format json]\n");
-  process.exit(1);
+  process.stdout.write(`${onboardingCommand()}\n`);
+  process.exit(0);
 }
 
 const args = parseArgs(process.argv.slice(3));

@@ -14,6 +14,7 @@ import {
   flowCommand,
   flowVisualCommand,
   guardCommand,
+  hostsCommand,
   ingestCommand,
   nightCommand,
   profileReviewCommand,
@@ -766,6 +767,28 @@ describe.sequential("NMS v0.2 optimization", () => {
     expect(out).toContain("/nms-auto");
   });
 
+  test("skill cli with no args prints onboarding for host command palettes", () => {
+    const out = execSync("npm run -s dev:skill", { cwd: process.cwd() }).toString();
+    expect(out).toContain("30 秒上手");
+    expect(out).toContain("Host Invocation");
+    expect(out).toContain("/nms-birthday");
+  });
+
+  test("host diagnostics can write zero-parameter Claude and OpenCode command files", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-hosts-"));
+    const out = JSON.parse(hostsCommand("json", { homeDir: dir, writeCommands: true }));
+    expect(out.written_command_files).toHaveLength(2);
+    const claudeCommand = path.join(dir, ".claude", "commands", "nms.md");
+    const opencodeCommand = path.join(dir, ".config", "opencode", "command", "nms.md");
+    expect(fs.existsSync(claudeCommand)).toBe(true);
+    expect(fs.existsSync(opencodeCommand)).toBe(true);
+    const content = fs.readFileSync(claudeCommand, "utf8");
+    expect(content).toContain("do not ask for a subcommand");
+    expect(content).toContain("dist/skill-cli.js");
+    expect(content).toContain("/nms-auto");
+    expect(out.repair_command).toBe("nms hosts --write-commands");
+  });
+
   test("classified slash routes are callable without user parameters", async () => {
     await (async () => {
       const old = process.cwd();
@@ -784,6 +807,7 @@ describe.sequential("NMS v0.2 optimization", () => {
           ["/nms-guard", "NMS Guard"],
           ["/nms-replay", "workflow"],
           ["/nms-doctor", "NMS Doctor"],
+          ["/nms-hosts", "NMS Host Integration"],
           ["/nms-ingest", "needs a real compressed event"]
         ] as const;
         for (const [slashCommand, expected] of routes) {

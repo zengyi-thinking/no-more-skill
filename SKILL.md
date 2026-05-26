@@ -35,6 +35,11 @@ Runtime aliases:
 - GSD/Gemini: `/nms:flow`, `/nms:report`, `/nms:auto`, `/nms:birthday`
 - Codex: `$nms-flow`, `$nms-report`, `$nms-auto`, `$nms-birthday`
 
+Host repair:
+
+- If `/nms` is not visible in Claude Code/OpenCode, run `nms hosts --write-commands` and restart the host.
+- Codex uses skill discovery/aliases rather than a slash command file; call `$nms-flow` or mention `no-more-skill`.
+
 Install:
 
 - `npx skills add zengyi-thinking/no-more-skill`
@@ -44,7 +49,7 @@ Install:
 Hook input:
 
 ```json
-{ "compressed_text": "", "conversation": "", "tool": "claude|codex" }
+{ "compressed_text": "", "conversation": "", "tool": "claude|codex|opencode" }
 ```
 
 Hook output:
@@ -78,6 +83,7 @@ Hook output:
 - `skills/nms-core/references/SAFETY.md` for apply and rollback boundaries.
 - `skills/nms-core/references/REPORTING.md` for report/image artifact rules.
 - `skills/nms-core/references/DOMAIN_PACKS.md` for non-coding expansion.
+- `skills/nms-core/references/HOST_INTEGRATION.md` for Claude Code/Codex/OpenCode discovery and repair.
 
 ## Promotion Notes
 

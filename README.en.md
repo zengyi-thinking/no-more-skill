@@ -93,6 +93,7 @@ Do not commit a real `.nms` folder to a public repository unless you have review
 | Claude plugin marketplace | Claude Code users | `/plugin marketplace add zengyi-thinking/no-more-skill` |
 | Local dev install | debugging and extension | `npm install && npm run build && npm link` |
 | Pinned zip artifact | CI/reproducible setup | `npm run release:pack` (includes marketplace + skill files) |
+| Host command repair | when `/nms` is not visible | `nms hosts --write-commands`, then restart Claude Code/OpenCode |
 
 ## Slash Skill Routing
 
@@ -102,6 +103,7 @@ If your host uses `/<skill>-<function>` style, normal users should call:
 - `/nms-report`
 - `/nms-auto`
 - `/nms-birthday`
+- `/nms` for the 30-second onboarding entry
 
 These commands call internal capabilities automatically. For example, `/nms-auto` transparently uses brief, suggest, guard, and the night gate.
 
@@ -127,6 +129,16 @@ Local entry:
 npm run dev:skill -- /nms-flow
 npm run dev -- route --cmd nms-flow
 ```
+
+If `/nms` does not appear in the host command palette, run:
+
+```bash
+nms hosts
+nms hosts --probe
+nms hosts --write-commands
+```
+
+`hosts --probe` performs host-aware health checks. On Windows, Claude Code runs a real `--version` probe, while Codex/OpenCode fall back to installation/runtime checks so packaged hosts are not misreported as broken. `hosts --write-commands` creates Claude Code `~/.claude/commands/nms.md` and OpenCode `~/.config/opencode/command/nms.md`. Codex does not need an extra slash command file; after installing the skill, call `$nms-flow`, `$nms-report`, `$nms-auto`, `$nms-birthday`, or mention `no-more-skill`.
 
 After marketplace registration:
 

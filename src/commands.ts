@@ -6,6 +6,7 @@ import { z } from "zod";
 import { DEFAULT_CONFIG } from "./config.js";
 import { validateWriteScope } from "./harness/guards.js";
 import { readPlannerInput, runNightHarness } from "./harness/engine.js";
+import { detectHostIntegrations, formatHostReport, writeHostCommandFiles } from "./host-integration.js";
 import { processCompressedEvent } from "./hook/engine.js";
 import { detectDomainFromText, detectSessionDomain, domainPackFor } from "./hook/domainPacks.js";
 import { JsonStorage } from "./storage.js";
@@ -62,6 +63,7 @@ export function onboardingCommand(format: "human" | "json" = "human"): string {
     quality: Stats["quality_metrics"];
     warnings: string[];
   };
+  const hostReport = detectHostIntegrations();
   const status = data.sample_count === 0
     ? "not_started"
     : data.quality.workflow_confidence < 0.5
@@ -113,6 +115,12 @@ export function onboardingCommand(format: "human" | "json" = "human"): string {
       stale_risk: data.quality.stale_risk,
       warnings: data.warnings
     },
+    host_integrations: hostReport.hosts.map((host) => ({
+      name: host.name,
+      status: host.status,
+      command: host.invocation[0],
+      fix_hint: host.fix_hint
+    })),
     user_commands: ["/nms-flow", "/nms-report", "/nms-auto", "/nms-birthday"],
     thirty_second_path: steps,
     principle: "Use real .nms data only. Empty data is a learning state, not an error."
@@ -131,6 +139,10 @@ export function onboardingCommand(format: "human" | "json" = "human"): string {
     "- /nms-report    生成真实数据报告",
     "- /nms-auto      让 Agent 读取习惯并安全 dry-run",
     "- /nms-birthday  生成可继承的生日记忆胶囊",
+    "",
+    "== 宿主调用状态 / Host Invocation ==",
+    ...payload.host_integrations.map((host) => `- ${host.name}: ${host.status} · ${host.command}`),
+    "如果 /nms 不出现：运行 nms hosts --write-commands，然后重启 Claude Code/OpenCode。",
     "",
     "== 下一步 / Next Steps ==",
     ...steps.map((step, index) => `${index + 1}. ${step.title}\nwhy: ${step.why}\nnext: ${step.command}`),
@@ -1215,6 +1227,30 @@ function resumeNightRunCommand(resumeId: string): string {
   );
 }
 
+export function hostsCommand(
+  format: "human" | "json" = "human",
+  options?: { probe?: boolean; writeCommands?: boolean; homeDir?: string }
+): string {
+  const written = options?.writeCommands
+    ? writeHostCommandFiles({ homeDir: options.homeDir })
+    : [];
+  const report = detectHostIntegrations({
+    homeDir: options?.homeDir,
+    probeExecutables: options?.probe ?? false
+  });
+  const payload = {
+    ...report,
+    written_command_files: written
+  };
+  if (format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    written.length > 0
+      ? `Command files written: ${written.map((item) => `${item.host}:${item.path}`).join(", ")}`
+      : undefined,
+    formatHostReport(report)
+  ].filter(Boolean).join("\n");
+}
+
 export function doctorCommand(): string {
   const storage = new JsonStorage();
   const db = storage.load();
@@ -1264,6 +1300,14 @@ export function doctorCommand(): string {
       check: "Git Safety",
       status: "WARN",
       detail: "not a git repository"
+    });
+  }
+  const hostReport = detectHostIntegrations();
+  for (const host of hostReport.hosts) {
+    checks.push({
+      check: `Host ${host.label}`,
+      status: host.status === "ready" ? "PASS" : "WARN",
+      detail: `${host.status}; invoke=${host.invocation[0]}; fix=${host.fix_hint}`
     });
   }
 

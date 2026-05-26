@@ -11,6 +11,7 @@ import {
   flowVisualCommand,
   guardCommand,
   guardPendingCommand,
+  hostsCommand,
   ingestGuideCommand,
   ingestCommand,
   nightCommand,
@@ -23,7 +24,7 @@ import {
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.5");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.6");
 
 program.action(() => {
   process.stdout.write(`${onboardingCommand()}\n`);
@@ -177,6 +178,20 @@ program
   .description("read-only diagnostics for data and git safety")
   .action(() => {
     process.stdout.write(`${doctorCommand()}\n`);
+  });
+
+program
+  .command("hosts", { hidden: true })
+  .description("diagnose and repair Claude Code/Codex/OpenCode host integration")
+  .option("--format <type>", "human or json", "human")
+  .option("--probe", "run host --version probes")
+  .option("--write-commands", "write Claude Code/OpenCode /nms command files")
+  .action((opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    process.stdout.write(`${hostsCommand(format, {
+      probe: Boolean(opts.probe),
+      writeCommands: Boolean(opts.writeCommands)
+    })}\n`);
   });
 
 program

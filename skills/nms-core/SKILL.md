@@ -26,6 +26,7 @@ Do not promote low-level routes to users. `/nms-auto` is the public workflow ent
 - GSD style: `/nms:flow`, `/nms:report`, `/nms:auto`, `/nms:birthday`
 - Codex style: `$nms-flow`, `$nms-report`, `$nms-auto`, `$nms-birthday`
 - Agent route mode: `nms route --cmd /nms-flow`
+- Host repair: if `/nms` is not visible in Claude Code/OpenCode, run `nms hosts --write-commands` and restart the host.
 
 ## Notes
 
@@ -43,3 +44,4 @@ Do not promote low-level routes to users. `/nms-auto` is the public workflow ent
 - `references/SAFETY.md` - apply, branch, path, secret, rollback rules.
 - `references/REPORTING.md` - report, image, prompt, artifact rules.
 - `references/DOMAIN_PACKS.md` - expansion beyond coding.
+- `references/HOST_INTEGRATION.md` - Claude Code/Codex/OpenCode discovery and repair.

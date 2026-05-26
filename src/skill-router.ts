@@ -9,6 +9,7 @@ import {
   flowVisualCommand,
   guardCommand,
   guardPendingCommand,
+  hostsCommand,
   ingestGuideCommand,
   ingestCommand,
   nightCommand,
@@ -153,6 +154,11 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     }
     case "/nms-doctor":
       return doctorCommand();
+    case "/nms-hosts":
+      return hostsCommand((args.format as "human" | "json") ?? "human", {
+        probe: toBool(args.probe),
+        writeCommands: toBool(args["write-commands"]) || toBool(args.writeCommands)
+      });
     case "/nms-data":
       return dataStatusCommand((args.format as "human" | "json") ?? "human");
     case "/nms-profile":

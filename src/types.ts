@@ -116,7 +116,7 @@ export interface ProfilePatch {
 
 export interface ArtifactRecord {
   artifact_id: string;
-  type: "report" | "image" | "prompt" | "night-run" | "context";
+  type: "report" | "image" | "prompt" | "night-run" | "context" | "audit" | "error";
   created_at: string;
   path: string;
   source_data_hash: string;
@@ -124,17 +124,67 @@ export interface ArtifactRecord {
   metadata: Record<string, unknown>;
 }
 
+export type PolicyProfileName = "strict" | "normal" | "experimental";
+
+export interface SecretScanHit {
+  file: string;
+  rule: ".env" | "token" | "api_key" | "private_key";
+  summary: string;
+}
+
+export interface AuditRecord {
+  audit_id: string;
+  created_at: string;
+  command: string;
+  triggered_by: string;
+  policy_profile: PolicyProfileName;
+  input_summary: string;
+  file_scope: string[];
+  gate_result: string;
+  artifact_paths: string[];
+  notes: string[];
+}
+
 export interface BirthdayMemory {
   latest_capsule_ref: string;
   generated_at: string;
   north_star: string;
   retained_commitments: string[];
+  personality_tags: string[];
+  evolution_summary: {
+    headline: string;
+    narrative: string[];
+  };
+  behavior_delta: {
+    sample_count_delta: number;
+    behavior_score_delta: number;
+    workflow_confidence_delta: number;
+    stale_risk_delta: number;
+    domain_shift: {
+      current: string | null;
+      previous: string | null;
+      changed: boolean;
+      signal: string;
+    };
+    skill_changes: Array<{
+      name: string;
+      current: number;
+      previous: number;
+      delta: number;
+      trend: "new" | "up" | "down" | "stable";
+    }>;
+  };
+  evolution_lanes: {
+    inherit_keep: string[];
+    retire_stop: string[];
+    new_growth: string[];
+  };
   next_year_targets: string[];
   risks_to_watch: string[];
 }
 
 export interface BirthdayCapsule {
-  schema_version: 1;
+  schema_version: 2;
   generated_at: string;
   project_id: string;
   period_days: number;
@@ -145,6 +195,35 @@ export interface BirthdayCapsule {
   stable_workflows: string[];
   emerging_skills: string[];
   changed_habits: string[];
+  personality_tags: string[];
+  evolution_summary: {
+    headline: string;
+    narrative: string[];
+  };
+  behavior_delta: {
+    sample_count_delta: number;
+    behavior_score_delta: number;
+    workflow_confidence_delta: number;
+    stale_risk_delta: number;
+    domain_shift: {
+      current: string | null;
+      previous: string | null;
+      changed: boolean;
+      signal: string;
+    };
+    skill_changes: Array<{
+      name: string;
+      current: number;
+      previous: number;
+      delta: number;
+      trend: "new" | "up" | "down" | "stable";
+    }>;
+  };
+  evolution_lanes: {
+    inherit_keep: string[];
+    retire_stop: string[];
+    new_growth: string[];
+  };
   growth_vectors: Array<{
     name: string;
     signal: string;
@@ -186,6 +265,7 @@ export interface AgentContext {
   safety_policy: {
     default_apply: boolean;
     requires_explicit_apply: boolean;
+    policy_profile: PolicyProfileName;
     allowed_write_roots: string[];
     blocked_patterns: string[];
   };
@@ -207,6 +287,14 @@ export interface NmsConfig {
     max_retry: number;
     allowed_roots: string[];
     core_explicit_whitelist: string[];
+    policy_profiles: Record<
+      PolicyProfileName,
+      {
+        allowed_roots: string[];
+        core_explicit_whitelist: string[];
+        secret_scan_enabled: boolean;
+      }
+    >;
   };
 }
 
@@ -247,6 +335,7 @@ export interface FailureModel {
   code: "CONFIG_ERROR" | "POLICY_BLOCK" | "TEST_FAIL" | "REVIEW_FAIL" | "TIMEOUT";
   failure_reason: string;
   recovery_hint: string;
+  next_safe_command: string;
   retry_count: number;
   non_retryable: boolean;
   state_at_failure: State;
@@ -272,8 +361,21 @@ export interface NightReport {
   final_state: State;
   retries: number;
   logs: string[];
+  policy_profile?: PolicyProfileName;
+  audit_artifact?: string;
   policy_logs?: PolicyLogEntry[];
   state_logs?: StateLogEntry[];
   explain_chain?: string[];
   failure?: FailureModel;
+}
+
+export interface HookConsumeSummary {
+  generated_at: string;
+  watched_dir: string;
+  processed: number;
+  ingested: number;
+  duplicates: number;
+  failed: number;
+  archived: string[];
+  failed_records: string[];
 }

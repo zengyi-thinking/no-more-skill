@@ -12,6 +12,7 @@ import {
   hostsCommand,
   ingestGuideCommand,
   ingestCommand,
+  ingestWatchCommand,
   nightCommand,
   onboardingCommand,
   profileReviewCommand,
@@ -74,6 +75,7 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     case "/nms-help":
       return onboardingCommand((args.format as "human" | "json") ?? "human");
     case "/nms-ingest":
+      if (args.watch) return ingestWatchCommand(args.watch as string | undefined);
       if (!args.input) return ingestGuideCommand();
       return ingestCommand(args.input as string | undefined);
     case "/nms-auto":
@@ -121,8 +123,15 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         ? rawFiles.map(String)
         : String(rawFiles).split(",").map((item) => item.trim()).filter(Boolean);
       return files.length > 0
-        ? guardCommand(files, (args.format as "human" | "json") ?? "human")
-        : guardPendingCommand((args.format as "human" | "json") ?? "human");
+        ? guardCommand(
+            files,
+            (args.format as "human" | "json") ?? "human",
+            (args["policy-profile"] as "strict" | "normal" | "experimental") ?? "normal"
+          )
+        : guardPendingCommand(
+            (args.format as "human" | "json") ?? "human",
+            (args["policy-profile"] as "strict" | "normal" | "experimental") ?? "normal"
+          );
     }
     case "/nms-replay":
       return replayCommand();
@@ -134,7 +143,8 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         task: args.task as string | undefined,
         taskFile: (args["task-file"] as string | undefined) ?? (args.taskFile as string | undefined),
         resume: args.resume as string | undefined,
-        timeBudget: toNum(args["time-budget"] ?? args.timeBudget, 5)
+        timeBudget: toNum(args["time-budget"] ?? args.timeBudget, 5),
+        policyProfile: (args["policy-profile"] as "strict" | "normal" | "experimental") ?? "strict"
       });
     case "/nms-report": {
       const reportPath = await reportCommand({

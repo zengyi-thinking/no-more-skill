@@ -4,14 +4,14 @@ import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { z } from "zod";
 import { DEFAULT_CONFIG } from "./config.js";
-import { validateWriteScope } from "./harness/guards.js";
+import { resolvePolicyProfile, validateWriteScope } from "./harness/guards.js";
 import { readPlannerInput, runNightHarness } from "./harness/engine.js";
 import { detectHostIntegrations, formatHostReport, writeHostCommandFiles } from "./host-integration.js";
 import { processCompressedEvent } from "./hook/engine.js";
 import { detectDomainFromText, detectSessionDomain, domainPackFor } from "./hook/domainPacks.js";
-import { JsonStorage } from "./storage.js";
+import { JsonStorage, redactText } from "./storage.js";
 import { State } from "./types.js";
-import type { AgentContext, BirthdayCapsule, HookInput, NightReport, PlannerOutput, SessionRecord, Stats } from "./types.js";
+import type { AgentContext, BirthdayCapsule, HookConsumeSummary, HookInput, NightReport, PlannerOutput, PolicyProfileName, SessionRecord, Stats } from "./types.js";
 
 const InputSchema = z.object({
   compressed_text: z.string(),
@@ -24,6 +24,61 @@ type ReportTemplate = "daily" | "weekly" | "video" | "portfolio";
 function readPayload(inputFile?: string): string {
   if (inputFile) return fs.readFileSync(inputFile, "utf8");
   return fs.readFileSync(0, "utf8");
+}
+
+function nowStamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function trimSummary(text: string, limit = 180): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit - 1)}...`;
+}
+
+function relativeToNmsRoot(storage: JsonStorage, filePath: string): string {
+  return path.relative(storage.root, filePath).replaceAll("\\", "/");
+}
+
+function writeJsonArtifact(rootFile: string, payload: unknown): void {
+  fs.mkdirSync(path.dirname(rootFile), { recursive: true });
+  fs.writeFileSync(rootFile, JSON.stringify(payload, null, 2), "utf8");
+}
+
+function nextSafeForFailure(code: string): string {
+  switch (code) {
+    case "POLICY_BLOCK":
+      return "nms guard --format json";
+    case "CONFIG_ERROR":
+      return "nms doctor";
+    case "TEST_FAIL":
+    case "REVIEW_FAIL":
+      return "nms night --dry-run --explain --task-file task.json";
+    default:
+      return "nms auto";
+  }
+}
+
+function recordCommandAudit(storage: JsonStorage, input: {
+  command: string;
+  triggeredBy: string;
+  policyProfile: PolicyProfileName;
+  inputSummary: string;
+  fileScope: string[];
+  gateResult: string;
+  artifactPaths: string[];
+  notes?: string[];
+}): string {
+  return storage.recordAudit({
+    command: input.command,
+    triggered_by: input.triggeredBy,
+    policy_profile: input.policyProfile,
+    input_summary: input.inputSummary,
+    file_scope: input.fileScope,
+    gate_result: input.gateResult,
+    artifact_paths: input.artifactPaths,
+    notes: input.notes ?? []
+  });
 }
 
 function defaultTaskSummary(storage: JsonStorage): string {
@@ -50,10 +105,150 @@ export function ingestGuideCommand(): string {
     "Use one of these real-data inputs:",
     "- /nms-ingest --input input.json",
     "- nms ingest --input input.json",
+    "- nms ingest --watch .nms/inbox",
+    "- nms hook ingest-file .nms/inbox/event.json",
     "- cat input.json | nms ingest",
     "Required payload:",
     "{\"compressed_text\":\"...\",\"conversation\":\"...\",\"tool\":\"claude|codex|opencode\"}"
   ].join("\n");
+}
+
+function archiveHookFile(sourcePath: string, targetDir: string): string {
+  fs.mkdirSync(targetDir, { recursive: true });
+  const fileName = `${nowStamp()}-${path.basename(sourcePath)}`;
+  const target = path.join(targetDir, fileName);
+  fs.renameSync(sourcePath, target);
+  return target;
+}
+
+function buildHookErrorPayload(filePath: string, rawSummary: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    kind: "hook-ingest",
+    source: filePath,
+    reason: message,
+    recovery_hint: "Ensure the file is valid JSON and matches { compressed_text, conversation, tool }.",
+    next_safe_command: "nms doctor",
+    input_summary: trimSummary(redactText(rawSummary || path.basename(filePath)))
+  };
+}
+
+function processHookFile(filePath: string, storage = new JsonStorage(), moveAfterProcess = false): {
+  status: "ingested" | "duplicate" | "failed";
+  archivePath?: string;
+  errorPath?: string;
+  summary: string;
+} {
+  const raw = fs.readFileSync(filePath, "utf8");
+  let inputSummary = trimSummary(raw);
+  try {
+    const parsed = InputSchema.parse(JSON.parse(raw)) as HookInput;
+    inputSummary = trimSummary(redactText(`${parsed.tool}: ${parsed.compressed_text}`));
+    const duplicate = storage.findDuplicateSession(storage.load(), parsed);
+    const out = processCompressedEvent(parsed, storage);
+    const status = duplicate ? "duplicate" : "ingested";
+    const archivePath = moveAfterProcess
+      ? archiveHookFile(filePath, path.join(storage.root, "inbox", "archive"))
+      : undefined;
+    const archiveRef = archivePath ? relativeToNmsRoot(storage, archivePath) : undefined;
+    recordCommandAudit(storage, {
+      command: "hook-ingest-file",
+      triggeredBy: "local-cli",
+      policyProfile: "normal",
+      inputSummary,
+      fileScope: [filePath],
+      gateResult: status.toUpperCase(),
+      artifactPaths: [archiveRef].filter((value): value is string => Boolean(value)),
+      notes: [`skills=${out.skills_used.join(",") || "(none)"}`]
+    });
+    return { status, archivePath, summary: inputSummary };
+  } catch (error) {
+    const errorArtifact = storage.recordErrorArtifact(buildHookErrorPayload(filePath, inputSummary, error));
+    const failedPath = moveAfterProcess
+      ? archiveHookFile(filePath, path.join(storage.root, "inbox", "failed"))
+      : undefined;
+    recordCommandAudit(storage, {
+      command: "hook-ingest-file",
+      triggeredBy: "local-cli",
+      policyProfile: "normal",
+      inputSummary,
+      fileScope: [filePath],
+      gateResult: "FAILED",
+      artifactPaths: [
+        relativeToNmsRoot(storage, errorArtifact),
+        ...(failedPath ? [relativeToNmsRoot(storage, failedPath)] : [])
+      ],
+      notes: [error instanceof Error ? error.message : String(error)]
+    });
+    return {
+      status: "failed",
+      archivePath: failedPath,
+      errorPath: errorArtifact,
+      summary: inputSummary
+    };
+  }
+}
+
+export function hookIngestFileCommand(filePath: string): string {
+  const storage = new JsonStorage();
+  const result = processHookFile(path.resolve(filePath), storage, false);
+  return JSON.stringify(
+    {
+      file: path.resolve(filePath),
+      status: result.status,
+      archive_path: result.archivePath ?? null,
+      error_path: result.errorPath ?? null,
+      summary: result.summary
+    },
+    null,
+    2
+  );
+}
+
+export function ingestWatchCommand(watchDir?: string): string {
+  const storage = new JsonStorage();
+  const dir = path.resolve(watchDir ?? path.join(storage.root, "inbox"));
+  fs.mkdirSync(dir, { recursive: true });
+  const queue = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => path.join(dir, entry.name))
+    .sort();
+  const summary: HookConsumeSummary = {
+    generated_at: new Date().toISOString(),
+    watched_dir: dir,
+    processed: 0,
+    ingested: 0,
+    duplicates: 0,
+    failed: 0,
+    archived: [],
+    failed_records: []
+  };
+  const notes: string[] = [];
+  for (const file of queue) {
+    const result = processHookFile(file, storage, true);
+    summary.processed += 1;
+    if (result.status === "ingested") summary.ingested += 1;
+    if (result.status === "duplicate") summary.duplicates += 1;
+    if (result.status === "failed") summary.failed += 1;
+    if (result.archivePath) summary.archived.push(result.archivePath);
+    if (result.errorPath) summary.failed_records.push(result.errorPath);
+    notes.push(`${path.basename(file)}:${result.status}`);
+  }
+  recordCommandAudit(storage, {
+    command: "ingest-watch",
+    triggeredBy: "local-cli",
+    policyProfile: "normal",
+    inputSummary: `consume inbox ${dir}`,
+    fileScope: queue.map((file) => file.replaceAll("\\", "/")),
+    gateResult: summary.failed > 0 ? "PARTIAL" : "OK",
+    artifactPaths: [
+      ...summary.archived.map((file) => relativeToNmsRoot(storage, file)),
+      ...summary.failed_records.map((file) => relativeToNmsRoot(storage, file))
+    ],
+    notes
+  });
+  return JSON.stringify(summary, null, 2);
 }
 
 export function onboardingCommand(format: "human" | "json" = "human"): string {
@@ -183,6 +378,14 @@ function countFiles(root: string, suffix?: string): number {
   };
   visit(root);
   return count;
+}
+
+function countDirectFiles(root: string, suffix?: string): number {
+  if (!fs.existsSync(root)) return 0;
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && (!suffix || entry.name.endsWith(suffix)))
+    .length;
 }
 
 function parsePeriodDays(period = "7d"): number | undefined {
@@ -395,6 +598,484 @@ function reportTemplateHtml(template: ReportTemplate, topDomains: [string, numbe
   return `<section class="card"><h2>${copy.title}</h2><p class="muted">${copy.description}</p><div class="timeline">${body[template]}</div></section>`;
 }
 
+type VisualTheme = "flow" | "report" | "birthday";
+
+function visualAccent(theme: VisualTheme): { accent: string; accentSoft: string; glow: string; signal: string } {
+  if (theme === "birthday") {
+    return {
+      accent: "#f6c453",
+      accentSoft: "rgba(246,196,83,.18)",
+      glow: "rgba(246,196,83,.18)",
+      signal: "#f97316"
+    };
+  }
+  if (theme === "report") {
+    return {
+      accent: "#60a5fa",
+      accentSoft: "rgba(96,165,250,.18)",
+      glow: "rgba(34,211,238,.16)",
+      signal: "#34d399"
+    };
+  }
+  return {
+    accent: "#22d3ee",
+    accentSoft: "rgba(34,211,238,.18)",
+    glow: "rgba(34,211,238,.16)",
+    signal: "#34d399"
+  };
+}
+
+function visualShell(args: {
+  theme: VisualTheme;
+  title: string;
+  eyebrow: string;
+  headline: string;
+  subtitle: string;
+  metrics: Array<{ label: string; value: string; note?: string }>;
+  body: string;
+}): string {
+  const accent = visualAccent(args.theme);
+  return `<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(args.title)}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg:#070a13;
+      --bg-2:#04060d;
+      --panel:rgba(10,15,26,.8);
+      --panel-strong:rgba(12,18,30,.94);
+      --line:rgba(148,163,184,.18);
+      --text:#eff4ff;
+      --muted:#95a3bb;
+      --accent:${accent.accent};
+      --accent-soft:${accent.accentSoft};
+      --signal:${accent.signal};
+      --danger:#fb7185;
+      --glow:${accent.glow};
+      --radius-xl:30px;
+      --radius-lg:22px;
+      --radius-md:16px;
+      --shadow:0 26px 90px rgba(0,0,0,.36);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin:0;
+      font-family:"Aptos Display","Segoe UI","PingFang SC",sans-serif;
+      background:
+        radial-gradient(circle at 12% 2%, var(--glow), transparent 26%),
+        radial-gradient(circle at 86% 0%, var(--accent-soft), transparent 24%),
+        linear-gradient(180deg,var(--bg),var(--bg-2) 70%);
+      color:var(--text);
+    }
+    main { max-width: 1220px; margin: 0 auto; padding: 38px 18px 64px; }
+    .hero,.card {
+      border:1px solid var(--line);
+      background:linear-gradient(180deg,var(--panel-strong),var(--panel));
+      border-radius:var(--radius-xl);
+      box-shadow:var(--shadow);
+    }
+    .hero {
+      padding:34px 28px 28px;
+      position:relative;
+      overflow:hidden;
+    }
+    .hero:after {
+      content:"";
+      position:absolute;
+      inset:auto -80px -90px auto;
+      width:260px;
+      height:260px;
+      border-radius:50%;
+      background:radial-gradient(circle, var(--accent-soft), transparent 70%);
+      pointer-events:none;
+    }
+    .eyebrow {
+      color:var(--accent);
+      font-size:12px;
+      letter-spacing:.18em;
+      text-transform:uppercase;
+    }
+    h1 {
+      margin:14px 0 10px;
+      font-size:clamp(38px,6vw,82px);
+      line-height:.92;
+      max-width:980px;
+    }
+    .subtitle {
+      color:var(--muted);
+      font-size:17px;
+      line-height:1.75;
+      max-width:820px;
+      text-wrap:pretty;
+    }
+    .metric-grid {
+      display:grid;
+      grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:14px;
+      margin-top:22px;
+    }
+    .metric {
+      border:1px solid var(--line);
+      border-radius:var(--radius-lg);
+      padding:16px;
+      background:rgba(255,255,255,.02);
+      min-height:112px;
+    }
+    .metric-label { color:var(--muted); font-size:14px; }
+    .metric-value { font-size:34px; font-weight:850; margin-top:8px; }
+    .metric-note { color:#c7d3ea; font-size:13px; margin-top:6px; }
+    .grid-2 {
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:18px;
+      margin-top:18px;
+    }
+    .grid-3 {
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:18px;
+      margin-top:18px;
+    }
+    .card { padding:22px; margin-top:18px; }
+    h2 { margin:0 0 14px; font-size:24px; }
+    h3 { margin:0 0 10px; font-size:18px; }
+    .muted { color:var(--muted); }
+    .bar-row { margin:14px 0; }
+    .bar-label {
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      font-size:14px;
+      color:#dce8ff;
+    }
+    .bar {
+      height:12px;
+      border-radius:999px;
+      background:rgba(148,163,184,.12);
+      margin-top:8px;
+      overflow:hidden;
+    }
+    .bar > span {
+      display:block;
+      height:100%;
+      border-radius:inherit;
+      background:linear-gradient(90deg,var(--accent),var(--signal));
+    }
+    .timeline { display:grid; gap:12px; }
+    .step {
+      display:flex;
+      gap:12px;
+      align-items:flex-start;
+    }
+    .dot {
+      width:30px;
+      height:30px;
+      flex:0 0 auto;
+      display:grid;
+      place-items:center;
+      border-radius:50%;
+      border:1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+      background:color-mix(in srgb, var(--accent) 18%, transparent);
+      color:var(--accent);
+      font-weight:700;
+    }
+    .path {
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      align-items:center;
+    }
+    .node,.pill,.delta-pill {
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:8px 12px;
+      border-radius:999px;
+      border:1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+      background:color-mix(in srgb, var(--accent) 12%, transparent);
+      color:#d9f6ff;
+      margin:4px 8px 4px 0;
+    }
+    .arrow { color:var(--accent); font-weight:800; }
+    .delta-pill.negative {
+      border-color:rgba(251,113,133,.36);
+      background:rgba(251,113,133,.12);
+      color:#ffd8df;
+    }
+    .delta-pill.neutral {
+      border-color:rgba(148,163,184,.24);
+      background:rgba(148,163,184,.1);
+      color:#e2e8f0;
+    }
+    .callout {
+      border-radius:var(--radius-lg);
+      padding:16px 18px;
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.02);
+    }
+    .callout.warning {
+      border-color:rgba(251,113,133,.34);
+      background:rgba(127,29,29,.2);
+      color:#ffe4ea;
+    }
+    .lane {
+      border-radius:var(--radius-lg);
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.02);
+      padding:16px;
+      min-height:220px;
+    }
+    .lane.keep { border-color:rgba(52,211,153,.28); }
+    .lane.stop { border-color:rgba(251,113,133,.28); }
+    .lane.new { border-color:rgba(245,158,11,.28); }
+    .list { display:grid; gap:10px; }
+    .item {
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:12px 14px;
+      background:rgba(255,255,255,.02);
+      text-wrap:pretty;
+    }
+    .source {
+      border-top:1px solid var(--line);
+      margin-top:18px;
+      padding-top:14px;
+      color:var(--muted);
+      font-size:13px;
+      line-height:1.7;
+    }
+    img {
+      width:100%;
+      border-radius:18px;
+      border:1px solid var(--line);
+      margin-top:14px;
+    }
+    code {
+      color:#cfeeff;
+      background:#091120;
+      border-radius:8px;
+      padding:2px 6px;
+    }
+    @media (max-width: 980px) {
+      .metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .grid-2, .grid-3 { grid-template-columns:1fr; }
+    }
+    @media (max-width: 560px) {
+      main { padding:20px 12px 40px; }
+      .hero { padding:24px 18px 20px; }
+      .metric-grid { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <div class="eyebrow">${args.eyebrow}</div>
+    <h1>${args.headline}</h1>
+    <p class="subtitle">${args.subtitle}</p>
+    <div class="metric-grid">
+      ${args.metrics
+        .map(
+          (metric) => `<div class="metric"><div class="metric-label">${escapeHtml(metric.label)}</div><div class="metric-value">${escapeHtml(metric.value)}</div>${metric.note ? `<div class="metric-note">${escapeHtml(metric.note)}</div>` : ""}</div>`
+        )
+        .join("")}
+    </div>
+  </section>
+  ${args.body}
+</main>
+</body>
+</html>`;
+}
+
+function renderBarRows(entries: Array<{ label: string; value: number; note?: string }>, emptyText: string): string {
+  const max = Math.max(1, ...entries.map((entry) => entry.value));
+  if (entries.length === 0) return `<p class="muted">${escapeHtml(emptyText)}</p>`;
+  return entries
+    .map((entry) => {
+      const width = Math.max(6, Math.round((entry.value / max) * 100));
+      return `<div class="bar-row"><div class="bar-label"><span>${escapeHtml(entry.label)}</span><span>${entry.value}${entry.note ? ` · ${escapeHtml(entry.note)}` : ""}</span></div><div class="bar"><span style="width:${width}%"></span></div></div>`;
+    })
+    .join("");
+}
+
+function renderWorkflowPath(steps: string[], emptyText: string): string {
+  if (steps.length === 0) return `<p class="muted">${escapeHtml(emptyText)}</p>`;
+  return `<div class="path">${steps
+    .map((step, index) => `${index > 0 ? `<span class="arrow">→</span>` : ""}<span class="node">${escapeHtml(step)}</span>`)
+    .join("")}</div>`;
+}
+
+function renderTimeline(items: Array<{ title: string; body: string; meta?: string }>, emptyText: string): string {
+  if (items.length === 0) return `<p class="muted">${escapeHtml(emptyText)}</p>`;
+  return `<div class="timeline">${items
+    .map((item, index) => `<div class="step"><div class="dot">${index + 1}</div><div><strong>${escapeHtml(item.title)}</strong><div class="muted">${escapeHtml(item.body)}</div>${item.meta ? `<div class="muted">${escapeHtml(item.meta)}</div>` : ""}</div></div>`)
+    .join("")}</div>`;
+}
+
+function renderPills(items: string[], emptyText: string, tone: "positive" | "negative" | "neutral" = "positive"): string {
+  if (items.length === 0) return `<p class="muted">${escapeHtml(emptyText)}</p>`;
+  const cls = tone === "positive" ? "" : ` ${tone}`;
+  return items.map((item) => `<span class="delta-pill${cls}">${escapeHtml(item)}</span>`).join("");
+}
+
+function signedDelta(value: number, digits = 0): string {
+  const fixed = digits > 0 ? value.toFixed(digits) : String(Math.round(value));
+  if (value > 0) return `+${fixed}`;
+  return fixed;
+}
+
+function buildSkillChanges(
+  currentCounts: Record<string, number>,
+  previousCounts: Record<string, number>,
+  limit = 6
+): Array<{ name: string; current: number; previous: number; delta: number; trend: "new" | "up" | "down" | "stable" }> {
+  return [...new Set([...Object.keys(currentCounts), ...Object.keys(previousCounts)])]
+    .map((name) => {
+      const current = currentCounts[name] ?? 0;
+      const previous = previousCounts[name] ?? 0;
+      const delta = current - previous;
+      const trend: "new" | "up" | "down" | "stable" =
+        previous === 0 && current > 0
+          ? "new"
+          : delta > 0
+            ? "up"
+            : delta < 0
+              ? "down"
+              : "stable";
+      return { name, current, previous, delta, trend };
+    })
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || b.current - a.current || a.name.localeCompare(b.name))
+    .slice(0, limit);
+}
+
+function countByNames(record: Record<string, number>, names: string[]): number {
+  return names.reduce((sum, name) => sum + (record[name] ?? 0), 0);
+}
+
+function topDomainInfo(counts: Record<string, number>): { name: string | null; count: number } {
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return top ? { name: top[0], count: top[1] } : { name: null, count: 0 };
+}
+
+function derivePersonalityTags(input: {
+  currentSkillCounts: Record<string, number>;
+  previousSkillCounts: Record<string, number>;
+  currentDomainCounts: Record<string, number>;
+  previousDomainCounts: Record<string, number>;
+  currentQuality: Stats["quality_metrics"];
+  previousQuality: Stats["quality_metrics"];
+  sampleCount: number;
+}): string[] {
+  if (input.sampleCount === 0) return [];
+  const tags: string[] = [];
+  const workflowDelta = input.currentQuality.workflow_confidence - input.previousQuality.workflow_confidence;
+  const scoreDelta = input.currentQuality.behavior_score - input.previousQuality.behavior_score;
+  const staleDelta = input.currentQuality.stale_risk - input.previousQuality.stale_risk;
+  const productSignals = ["PRD分析", "UI生成", "架构设计", "需求分析", "用户分析", "原型设计", "演示", "推广"];
+  const engineeringSignals = ["代码分析", "代码生成", "Debug", "性能优化"];
+  const expressionSignals = ["选题分析", "大纲生成", "草稿生成", "口播", "分镜", "页面", "图片", "发布"];
+  const productDelta = countByNames(input.currentSkillCounts, productSignals) - countByNames(input.previousSkillCounts, productSignals);
+  const engineeringDelta = countByNames(input.currentSkillCounts, engineeringSignals) - countByNames(input.previousSkillCounts, engineeringSignals);
+  const expressionDelta = countByNames(input.currentSkillCounts, expressionSignals) - countByNames(input.previousSkillCounts, expressionSignals);
+  const currentTopDomain = topDomainInfo(input.currentDomainCounts).name;
+  const previousTopDomain = topDomainInfo(input.previousDomainCounts).name;
+
+  if (workflowDelta >= 0.08 || scoreDelta >= 8) tags.push("更稳定");
+  if (!tags.includes("更稳定") && (workflowDelta <= -0.08 || currentTopDomain !== previousTopDomain)) tags.push("更发散");
+  if (productDelta > 0 || currentTopDomain === "product") tags.push("更产品化");
+  if (engineeringDelta > 0 || currentTopDomain === "coding") tags.push("更工程化");
+  if (expressionDelta > 0 || currentTopDomain === "writing" || currentTopDomain === "content") tags.push("更表达型");
+  if (staleDelta < 0 || (workflowDelta > 0 && input.currentQuality.stale_risk <= input.previousQuality.stale_risk)) {
+    tags.push("更安全保守");
+  }
+  return [...new Set(tags)].slice(0, 4);
+}
+
+function buildEvolutionSummary(input: {
+  sampleCount: number;
+  previousSampleCount: number;
+  currentQuality: Stats["quality_metrics"];
+  previousQuality: Stats["quality_metrics"];
+  domainShift: { current: string | null; previous: string | null; changed: boolean; signal: string };
+  skillChanges: Array<{ name: string; current: number; previous: number; delta: number; trend: "new" | "up" | "down" | "stable" }>;
+  tags: string[];
+}): { headline: string; narrative: string[] } {
+  if (input.sampleCount === 0) {
+    return {
+      headline: "今年的生日资产还在学习期，先积累真实样本。",
+      narrative: [
+        "当前周期没有足够的真实 session，NMS 只保留北极星和安全边界。",
+        "在没有证据时，不判断人格变化，也不编造技能频率。",
+        "先继续 ingest，再让 /nms-auto 继承生日资产。"
+      ]
+    };
+  }
+  const workflowDelta = input.currentQuality.workflow_confidence - input.previousQuality.workflow_confidence;
+  const scoreDelta = input.currentQuality.behavior_score - input.previousQuality.behavior_score;
+  const staleDelta = input.currentQuality.stale_risk - input.previousQuality.stale_risk;
+  const strongestSkillMove = input.skillChanges.find((item) => item.delta !== 0);
+  const headline =
+    workflowDelta >= 0.08 && scoreDelta >= 8
+      ? "这一岁，你的工作方式明显更稳，也更适合被 Agent 继承。"
+      : workflowDelta <= -0.08
+        ? "这一岁，你的工作方式变得更分散，适合先收敛主流程。"
+        : input.domainShift.changed
+          ? `这一岁，你的重心从 ${input.domainShift.previous ?? "未知领域"} 转向了 ${input.domainShift.current ?? "未知领域"}。`
+          : "这一岁，NMS 观察到你在延续一条正在成形的工作方式。";
+  return {
+    headline,
+    narrative: [
+      `样本变化：${input.previousSampleCount} -> ${input.sampleCount}，Behavior Score ${signedDelta(scoreDelta)}，Workflow Confidence ${signedDelta(workflowDelta * 100, 1)}pt。`,
+      input.domainShift.signal,
+      strongestSkillMove
+        ? `最明显的技能变化是 ${strongestSkillMove.name}（${signedDelta(strongestSkillMove.delta)}）。`
+        : "本周期没有明显的技能涨落，说明行为重心相对稳定。",
+      staleDelta === 0
+        ? "技能陈旧风险基本持平。"
+        : `技能陈旧风险 ${signedDelta(staleDelta)}pt，${staleDelta < 0 ? "说明近期样本更鲜活。" : "说明需要补最近真实任务。"}`
+    ].concat(input.tags.length > 0 ? [`当前可读到的变化标签：${input.tags.join("、")}。`] : [])
+  };
+}
+
+function buildEvolutionLanes(input: {
+  topWorkflow: string | undefined;
+  personalityTags: string[];
+  skillChanges: Array<{ name: string; current: number; previous: number; delta: number; trend: "new" | "up" | "down" | "stable" }>;
+  currentQuality: Stats["quality_metrics"];
+  currentTopDomain: string | null;
+}): { inherit_keep: string[]; retire_stop: string[]; new_growth: string[] } {
+  const inheritKeep = [
+    input.topWorkflow
+      ? `保留当前主 workflow：${input.topWorkflow}`
+      : "保留“先看真实样本、再决定执行”的工作纪律。",
+    "保留真实 .nms 数据优先，不编造结论。"
+  ];
+  if (input.personalityTags.length > 0) inheritKeep.push(`保留当前强势倾向：${input.personalityTags.join("、")}`);
+
+  const decline = input.skillChanges.filter((item) => item.delta < 0).slice(0, 2);
+  const retireStop = [
+    input.currentQuality.stale_risk >= 60
+      ? "停止依赖陈旧样本做强判断，先补最近真实任务。"
+      : "停止把偶发任务误当成长期偏好。",
+    ...decline.map((item) => `减少对 ${item.name} 的惯性依赖，重新验证它是否仍是主线。`)
+  ].slice(0, 3);
+
+  const growth = input.skillChanges.filter((item) => item.trend === "new" || item.delta > 0).slice(0, 3);
+  const newGrowth = growth.length > 0
+    ? growth.map((item) => `把 ${item.name} 发展成下一岁的稳定资产。`)
+    : [
+        input.currentTopDomain
+          ? `围绕 ${input.currentTopDomain} 继续沉淀可复用工作流。`
+          : "先完成至少 5 条真实 ingest，再谈长期拓展。"
+      ];
+
+  return { inherit_keep: inheritKeep, retire_stop: retireStop, new_growth: newGrowth };
+}
+
 function flowSuggestions(db: ReturnType<JsonStorage["load"]>): Array<{ title: string; why: string; next_command: string }> {
   const suggestions: Array<{ title: string; why: string; next_command: string }> = [];
   if (db.sessions.length === 0) {
@@ -547,7 +1228,10 @@ export function contextCommand(options?: {
     ...(context.birthday_memory
       ? [
           `North Star: ${context.birthday_memory.north_star}`,
-          `Targets: ${context.birthday_memory.next_year_targets.join(", ") || "(none)"}`
+          `Targets: ${context.birthday_memory.next_year_targets.join(", ") || "(none)"}`,
+          `Tags: ${context.birthday_memory.personality_tags.join(", ") || "(none)"}`,
+          `Evolution: ${context.birthday_memory.evolution_summary.headline}`,
+          `Risks: ${context.birthday_memory.risks_to_watch.join(", ") || "(none)"}`
         ]
       : ["(none yet)"]),
     "Warnings:",
@@ -580,7 +1264,10 @@ export function dataStatusCommand(format: "human" | "json" = "human"): string {
       event_files: countFiles(path.join(storage.root, "events"), ".jsonl"),
       session_files: countFiles(path.join(storage.root, "sessions"), ".json"),
       artifact_records: artifacts.length,
-      domain_packs: storage.loadDomainPacks().length
+      domain_packs: storage.loadDomainPacks().length,
+      audit_records: countFiles(path.join(storage.root, "audit"), ".jsonl"),
+      error_records: countFiles(path.join(storage.root, "artifacts", "errors"), ".json"),
+      inbox_pending: countDirectFiles(path.join(storage.root, "inbox"), ".json")
     },
     warnings
   };
@@ -594,7 +1281,7 @@ export function dataStatusCommand(format: "human" | "json" = "human"): string {
     `latest_session_at=${payload.latest_session_at ?? "(none)"}`,
     `domain_coverage=${payload.domain_coverage.map((item) => `${item.name}(${item.count})`).join(", ") || "(none)"}`,
     `quality=behavior:${payload.quality.behavior_score}, workflow_confidence:${payload.quality.workflow_confidence}, stale:${payload.quality.stale_risk}%`,
-    `facts=events:${payload.facts.event_files}, sessions:${payload.facts.session_files}, artifacts:${payload.facts.artifact_records}, domains:${payload.facts.domain_packs}`,
+    `facts=events:${payload.facts.event_files}, sessions:${payload.facts.session_files}, artifacts:${payload.facts.artifact_records}, domains:${payload.facts.domain_packs}, audits:${payload.facts.audit_records}, errors:${payload.facts.error_records}, inbox:${payload.facts.inbox_pending}`,
     "warnings:",
     ...(warnings.length > 0 ? warnings.map((warning) => `- ${warning}`) : ["- none"])
   ].join("\n");
@@ -766,17 +1453,24 @@ export function suggestCommand(options?: {
   ].join("\n");
 }
 
-export function guardCommand(files: string[], format: "human" | "json" = "human"): string {
+export function guardCommand(
+  files: string[],
+  format: "human" | "json" = "human",
+  policyProfile: PolicyProfileName = "normal"
+): string {
   const guard = files.length === 0
     ? { ok: false, reason: "No files provided for write-scope check." }
-    : validateWriteScope(files, DEFAULT_CONFIG);
+    : validateWriteScope(files, DEFAULT_CONFIG, policyProfile);
+  const policy = resolvePolicyProfile(DEFAULT_CONFIG, policyProfile);
   const payload = {
     ok: guard.ok,
     files,
     reason: guard.reason ?? "All files are inside allowed roots and file types.",
+    policy_profile: policyProfile,
+    secret_hits: guard.secret_hits ?? [],
     policy: {
-      allowed_roots: DEFAULT_CONFIG.harness.allowed_roots,
-      core_explicit_whitelist: DEFAULT_CONFIG.harness.core_explicit_whitelist,
+      allowed_roots: policy.allowed_roots,
+      core_explicit_whitelist: policy.core_explicit_whitelist,
       allowed_file_kinds: ["ui", "new", "test"]
     }
   };
@@ -784,22 +1478,29 @@ export function guardCommand(files: string[], format: "human" | "json" = "human"
   return [
     "== NMS Guard ==",
     `decision=${payload.ok ? "ALLOW" : "BLOCK"}`,
+    `policy_profile=${policyProfile}`,
     `reason=${payload.reason}`,
     `files=${files.join(", ") || "(none)"}`,
+    ...(payload.secret_hits.length > 0 ? [`secret_hits=${payload.secret_hits.map((hit) => `${hit.rule}:${hit.file}`).join(", ")}`] : []),
     `allowed_roots=${payload.policy.allowed_roots.join(", ")}`
   ].join("\n");
 }
 
-export function guardPendingCommand(format: "human" | "json" = "human"): string {
+export function guardPendingCommand(
+  format: "human" | "json" = "human",
+  policyProfile: PolicyProfileName = "normal"
+): string {
   const files = pendingGitFiles();
   if (files.length === 0) {
+    const policy = resolvePolicyProfile(DEFAULT_CONFIG, policyProfile);
     const payload = {
       ok: true,
       files,
       reason: "No pending git files detected. Nothing needs write-scope approval right now.",
+      policy_profile: policyProfile,
       policy: {
-        allowed_roots: DEFAULT_CONFIG.harness.allowed_roots,
-        core_explicit_whitelist: DEFAULT_CONFIG.harness.core_explicit_whitelist,
+        allowed_roots: policy.allowed_roots,
+        core_explicit_whitelist: policy.core_explicit_whitelist,
         allowed_file_kinds: ["ui", "new", "test"]
       }
     };
@@ -807,12 +1508,13 @@ export function guardPendingCommand(format: "human" | "json" = "human"): string 
     return [
       "== NMS Guard ==",
       "decision=ALLOW",
+      `policy_profile=${policyProfile}`,
       `reason=${payload.reason}`,
       "files=(none)",
       `allowed_roots=${payload.policy.allowed_roots.join(", ")}`
     ].join("\n");
   }
-  return guardCommand(files, format);
+  return guardCommand(files, format, policyProfile);
 }
 
 type DataStatusPayload = {
@@ -845,6 +1547,8 @@ type GuardPayload = {
   ok: boolean;
   files: string[];
   reason: string;
+  policy_profile?: PolicyProfileName;
+  secret_hits?: Array<{ file: string; rule: string; summary: string }>;
 };
 
 function decisionFromAuto(guard: GuardPayload, night: NightReport | null): "READY_FOR_REVIEW" | "BLOCKED_BY_POLICY" | "NEEDS_ATTENTION" {
@@ -855,6 +1559,7 @@ function decisionFromAuto(guard: GuardPayload, night: NightReport | null): "READ
 
 export function autoCommand(format: "human" | "json" = "human"): string {
   const storage = new JsonStorage();
+  const policyProfile: PolicyProfileName = "strict";
   const task = defaultTaskSummary(storage);
   const data = JSON.parse(dataStatusCommand("json")) as {
     sample_count: number;
@@ -868,9 +1573,9 @@ export function autoCommand(format: "human" | "json" = "human"): string {
   const context = JSON.parse(contextCommand({ task, format: "json" })) as AgentContext;
   const brief = JSON.parse(briefCommand({ task, profile: "strict", format: "json" })) as BriefPayload;
   const suggestion = JSON.parse(suggestCommand({ task, format: "json" })) as SuggestPayload;
-  const guard = JSON.parse(guardPendingCommand("json")) as GuardPayload;
+  const guard = JSON.parse(guardPendingCommand("json", policyProfile)) as GuardPayload;
   const night = guard.ok
-    ? JSON.parse(nightCommand({ dryRun: true, explain: true, task })) as NightReport
+    ? JSON.parse(nightCommand({ dryRun: true, explain: true, task, policyProfile })) as NightReport
     : null;
   const decision = decisionFromAuto(guard, night);
   const gateReason = !guard.ok
@@ -919,6 +1624,7 @@ export function autoCommand(format: "human" | "json" = "human"): string {
     mode: "dry-run",
     entry: "/nms-auto",
     hidden_internal_commands: true,
+    policy_profile: policyProfile,
     decision,
     task_summary: task,
     data_quality: {
@@ -951,12 +1657,14 @@ export function autoCommand(format: "human" | "json" = "human"): string {
       ran: Boolean(night),
       final_state: night?.final_state ?? State.ROLLBACK,
       dry_run: night?.dry_run ?? true,
+      audit_artifact: null as string | null,
       explain_chain: night?.explain_chain ?? [],
       failure: night?.failure ?? (!guard.ok
         ? {
             code: "POLICY_BLOCK",
             failure_reason: guard.reason,
             recovery_hint: "Resolve pending files outside the allowed write scope before auto execution.",
+            next_safe_command: "nms guard --format json",
             retry_count: 0,
             non_retryable: true,
             state_at_failure: State.PLAN,
@@ -968,6 +1676,28 @@ export function autoCommand(format: "human" | "json" = "human"): string {
     next_step: nextStep
   };
 
+  const autoArtifactPath = path.join(storage.root, "artifacts", "auto", `auto-${Date.now()}.json`);
+  writeJsonArtifact(autoArtifactPath, payload);
+  storage.recordArtifact({
+    type: "context",
+    path: relativeToNmsRoot(storage, autoArtifactPath),
+    source_data_hash: sha256(JSON.stringify(payload)),
+    real_data_only: true,
+    metadata: { kind: "auto", policy_profile: policyProfile, decision }
+  });
+  const autoAuditRef = recordCommandAudit(storage, {
+    command: "auto",
+    triggeredBy: "/nms-auto",
+    policyProfile,
+    inputSummary: task,
+    fileScope: guard.files,
+    gateResult: decision,
+    artifactPaths: [relativeToNmsRoot(storage, autoArtifactPath), ...(birthdayMemory ? [birthdayMemory.latest_capsule_ref] : [])],
+    notes: [gateReason]
+  });
+  payload.gate.audit_artifact = autoAuditRef;
+  writeJsonArtifact(autoArtifactPath, payload);
+
   if (format === "json") return JSON.stringify(payload, null, 2);
   return [
     "== NMS Auto ==",
@@ -978,6 +1708,8 @@ export function autoCommand(format: "human" | "json" = "human"): string {
     `Behavior Score: ${payload.data_quality.behavior_score}`,
     `Workflow Confidence: ${payload.data_quality.workflow_confidence}`,
     ...(birthdayMemory ? [`Birthday North Star: ${birthdayMemory.north_star}`] : []),
+    ...(birthdayMemory ? [`Birthday Evolution: ${birthdayMemory.evolution_summary.headline}`] : []),
+    ...(birthdayMemory ? [`Birthday Tags: ${birthdayMemory.personality_tags.join(", ") || "(none)"}`] : []),
     `Selected Workflow: ${workflowText}`,
     "== Agent Workflow ==",
     ...agentWorkflow.map((step, index) => `${index + 1}. ${step.stage}: ${step.status}\n   ${step.summary}`),
@@ -1004,104 +1736,81 @@ export function flowVisualCommand(): string {
     ?.split(" -> ") ?? [];
   const edgeEntries = workflowEdgeCounts(db.sessions).slice(0, 6);
   const quality = db.stats.quality_metrics;
-  const maxSkill = Math.max(1, ...topSkills.map(([, count]) => count));
-  const maxDomain = Math.max(1, ...domainEntries.map(([, count]) => count));
-  const html = `<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NMS Flow Dashboard</title>
-  <style>
-    :root { --bg:#080a12; --panel:rgba(15,23,42,.82); --line:rgba(148,163,184,.24); --text:#eef2ff; --muted:#94a3b8; --cyan:#22d3ee; --green:#34d399; --amber:#fbbf24; }
-    * { box-sizing: border-box; }
-    body { font-family: "Aptos Display", "Segoe UI", "PingFang SC", sans-serif; margin: 0; background: radial-gradient(circle at 10% 0%, rgba(34,211,238,.24), transparent 30%), radial-gradient(circle at 86% 8%, rgba(251,191,36,.16), transparent 26%), var(--bg); color: var(--text); }
-    .wrap { max-width: 1180px; margin: 0 auto; padding: 42px 22px; }
-    .hero,.card { background: var(--panel); border: 1px solid var(--line); border-radius: 28px; padding: 24px; margin-bottom: 18px; box-shadow: 0 18px 70px rgba(0,0,0,.28); }
-    .eyebrow { color: var(--cyan); text-transform: uppercase; letter-spacing: .15em; font-size: 12px; }
-    .title { font-size: clamp(34px,5vw,66px); line-height:.95; margin: 12px 0; max-width: 900px; font-weight: 850; }
-    .subtitle { color: var(--muted); font-size: 16px; line-height: 1.7; }
-    .grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
-    .two { display:grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-    .kpi { background: rgba(30,41,59,0.72); border: 1px solid rgba(148,163,184,.14); border-radius: 18px; padding: 15px; }
-    .kpi .v { font-size: 32px; font-weight: 800; margin-top: 8px; }
-    .bar { height: 12px; background: rgba(148,163,184,.16); border-radius: 999px; overflow: hidden; margin-top: 8px; }
-    .bar > div { height: 100%; background: linear-gradient(90deg,var(--cyan),var(--green)); }
-    .row { margin: 14px 0; }
-    .label { display:flex; justify-content:space-between; gap:12px; font-size:14px; color:#dbeafe; }
-    .path { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-    .node { border:1px solid rgba(34,211,238,.34); background:rgba(34,211,238,.12); color:#cffafe; padding:9px 12px; border-radius:999px; }
-    .arrow { color: var(--amber); }
-    code { background: #0b1220; padding: 2px 6px; border-radius: 6px; color: #93c5fd; }
-    @media (max-width: 860px) { .grid,.two { grid-template-columns: 1fr 1fr; } }
-    @media (max-width: 560px) { .grid,.two { grid-template-columns: 1fr; } .wrap { padding: 20px 12px; } }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="hero">
-      <div class="eyebrow">No More Skill · NMS 行为驾驶舱 · live behavior cockpit</div>
-      <div class="title">你的 Agent 工作方式，正在被真实数据驯化。</div>
-      <p class="subtitle">本页面读取本地 <code>.nms</code> 真实行为数据，展示领域分布、技能频率、主 workflow 和系统健康度。</p>
-      <div class="grid">
-        <div class="kpi"><div>Behavior Score</div><div class="v">${quality.behavior_score}</div></div>
-        <div class="kpi"><div>Workflow Confidence</div><div class="v">${Math.round(
-          quality.workflow_confidence * 100
-        )}%</div></div>
-        <div class="kpi"><div>Session Velocity(7d)</div><div class="v">${quality.session_velocity_7d}</div></div>
-        <div class="kpi"><div>Streak Days</div><div class="v">${quality.streak_days}</div></div>
-      </div>
-    </div>
-    <div class="two">
-      <div class="card">
-        <h3>Domain Mix</h3>
-        ${
-          domainEntries.length > 0
-            ? domainEntries
-                .map(
-                  ([name, count]) => `<div class="row"><div class="label"><span>${escapeHtml(name)}</span><span>${count}</span></div><div class="bar"><div style="width:${Math.max(6, Math.round((count / maxDomain) * 100))}%"></div></div></div>`
-                )
-                .join("")
-            : `<p class="subtitle">暂无领域数据。</p>`
-        }
-      </div>
-      <div class="card">
-        <h3>Top Skills</h3>
-        ${
-          topSkills.length > 0
-            ? topSkills
-                .map(
-                  ([name, count]) => `<div class="row"><div class="label"><span>${escapeHtml(name)}</span><span>${count}</span></div><div class="bar"><div style="width:${Math.max(6, Math.round((count / maxSkill) * 100))}%"></div></div></div>`
-                )
-                .join("")
-            : `<p class="subtitle">暂无技能频率数据。</p>`
-        }
-      </div>
-    </div>
-    <div class="card">
-      <h3>Main Workflow Path</h3>
-      <div class="path">
-        ${
-          topWorkflow.length > 0
-            ? topWorkflow.map((step, idx) => `${idx > 0 ? `<span class="arrow">→</span>` : ""}<span class="node">${escapeHtml(step)}</span>`).join("")
-            : `<span class="subtitle">暂无稳定 workflow。</span>`
-        }
-      </div>
-    </div>
-    <div class="card">
-      <h3>Top Workflow Edges</h3>
-      ${
-        edgeEntries.length > 0
-          ? edgeEntries
-              .map((edge) => `<div class="row"><div class="label"><span>${escapeHtml(edge.from)} → ${escapeHtml(edge.to)}</span><span>${edge.count}</span></div></div>`)
-              .join("")
-          : `<p class="subtitle">暂无 workflow 边数据。</p>`
-      }
-      <p class="subtitle">Use <code>nms flow --format json</code> for raw machine-readable data.</p>
-    </div>
-  </div>
-</body>
-</html>`;
+  const warnings: string[] = [];
+  if (db.sessions.length === 0) warnings.push("当前没有真实会话样本，页面只展示学习态，不做偏好推断。");
+  if (quality.stale_risk >= 60) warnings.push("陈旧风险较高，建议先补最近真实任务，再让 Agent 继承这些信号。");
+  const html = visualShell({
+    theme: "flow",
+    title: "NMS Flow Dashboard",
+    eyebrow: "No More Skill · NMS 行为驾驶舱 · Live Behavior Cockpit",
+    headline: "你的 Agent 工作方式，正在被真实数据驯化。",
+    subtitle: "这个驾驶舱只读取本地 .nms 真实数据，把领域分布、技能频率、workflow 路径和系统健康度放到同一张操作台上。",
+    metrics: [
+      { label: "Behavior Score", value: String(quality.behavior_score), note: "行为稳定度" },
+      { label: "Workflow Confidence", value: `${Math.round(quality.workflow_confidence * 100)}%`, note: "主流程置信度" },
+      { label: "Session Velocity(7d)", value: String(quality.session_velocity_7d), note: "近 7 天活跃度" },
+      { label: "Streak Days", value: String(quality.streak_days), note: "连续学习天数" }
+    ],
+    body: `
+      ${warnings.length > 0 ? `<section class="card"><div class="callout warning"><strong>当前提醒</strong><div class="muted">${warnings.map(escapeHtml).join(" · ")}</div></div></section>` : ""}
+      <section class="grid-2">
+        <div class="card">
+          <h2>Domain Mix</h2>
+          <p class="muted">最近被 NMS 学到的工作领域重心。</p>
+          ${renderBarRows(domainEntries.map(([name, count]) => ({ label: name, value: count })), "暂无领域数据。")}
+        </div>
+        <div class="card">
+          <h2>Skill Frequency</h2>
+          <p class="muted">不是 prompt 收藏，而是真实技能使用频率。</p>
+          ${renderBarRows(topSkills.map(([name, count]) => ({ label: name, value: count })), "暂无技能频率数据。")}
+        </div>
+      </section>
+      <section class="grid-2">
+        <div class="card">
+          <h2>Main Workflow Path</h2>
+          <p class="muted">当前最常被复用的工作路径。</p>
+          ${renderWorkflowPath(topWorkflow, "暂无稳定 workflow。")}
+        </div>
+        <div class="card">
+          <h2>Top Workflow Edges</h2>
+          <p class="muted">最常见的步骤跳转边，反映真实流程连接。</p>
+          ${renderTimeline(
+            edgeEntries.map((edge) => ({
+              title: `${edge.from} → ${edge.to}`,
+              body: `出现 ${edge.count} 次`
+            })),
+            "暂无 workflow 边数据。"
+          )}
+        </div>
+      </section>
+      <section class="card">
+        <h2>Interpretation Layer</h2>
+        <div class="grid-3">
+          <div class="lane keep">
+            <h3>Keep</h3>
+            <div class="list">
+              <div class="item">优先复用主 workflow，再决定是否拓展新路径。</div>
+              <div class="item">把高频技能视作 Agent 的默认熟悉区。</div>
+            </div>
+          </div>
+          <div class="lane stop">
+            <h3>Watch</h3>
+            <div class="list">
+              <div class="item">不要把空样本或旧样本误当成稳定偏好。</div>
+              <div class="item">不要绕过 <code>nms flow --format json</code> 的原始证据层。</div>
+            </div>
+          </div>
+          <div class="lane new">
+            <h3>Next</h3>
+            <div class="list">
+              <div class="item">让新任务继续沉淀到 <code>.nms</code>，提高 workflow confidence。</div>
+              <div class="item">若要执行任务，走 <code>/nms-auto</code> 而不是直接 apply。</div>
+            </div>
+          </div>
+        </div>
+        <div class="source">真实数据来源：<code>.nms/data.json</code>、<code>.nms/sessions</code>、<code>.nms/derived</code>。机器可读输出：<code>nms flow --format json</code>。</div>
+      </section>`
+  });
 
   const outDir = path.join(process.cwd(), ".nms");
   fs.mkdirSync(outDir, { recursive: true });
@@ -1125,15 +1834,18 @@ export function nightCommand(options: {
   taskFile?: string;
   task?: string;
   resume?: string;
+  policyProfile?: PolicyProfileName;
 }): string {
   if (options.resume) return resumeNightRunCommand(options.resume);
   const started = performance.now();
+  const policyProfile = options.policyProfile ?? "strict";
   const apply = Boolean(options.apply);
   const dryRun = apply ? Boolean(options.dryRun) : options.dryRun ?? true;
   if (apply && options.task && !options.taskFile) {
     return JSON.stringify(
       {
         dry_run: false,
+        policy_profile: policyProfile,
         final_state: State.ROLLBACK,
         retries: 0,
         logs: ["Auto-planned --task is dry-run only. Provide --task-file for apply."],
@@ -1141,6 +1853,7 @@ export function nightCommand(options: {
           code: "CONFIG_ERROR",
           failure_reason: "Apply requires explicit task-file",
           recovery_hint: "Run dry-run first, then create a reviewed task-file for --apply.",
+          next_safe_command: "nms night --dry-run --task \"your task\"",
           retry_count: 0,
           non_retryable: true,
           state_at_failure: State.PLAN,
@@ -1153,14 +1866,56 @@ export function nightCommand(options: {
   }
   const storage = new JsonStorage();
   const autoTask = options.task ?? (!options.taskFile && !apply ? defaultTaskSummary(storage) : undefined);
-  const plannerInput = options.taskFile
-    ? readPlannerInput(options.taskFile)
-    : autoTask
-      ? buildPlannerFromTask(autoTask, storage)
-      : undefined;
+  let plannerInput: PlannerOutput | undefined;
+  try {
+    plannerInput = options.taskFile
+      ? readPlannerInput(options.taskFile)
+      : autoTask
+        ? buildPlannerFromTask(autoTask, storage)
+        : undefined;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const errorArtifact = storage.recordErrorArtifact({
+      kind: "night-config",
+      source: options.taskFile ?? "task-file",
+      reason,
+      recovery_hint: "Verify that the task file exists and contains valid planner JSON.",
+      next_safe_command: "nms doctor",
+      input_summary: options.taskFile ?? "(missing task-file)"
+    });
+    const payload = {
+      dry_run: !apply,
+      policy_profile: policyProfile,
+      final_state: State.ROLLBACK,
+      retries: 0,
+      logs: [reason],
+      failure: {
+        code: "CONFIG_ERROR",
+        failure_reason: reason,
+        recovery_hint: "Verify that the task file exists and contains valid planner JSON.",
+        next_safe_command: "nms doctor",
+        retry_count: 0,
+        non_retryable: true,
+        state_at_failure: State.PLAN,
+        artifacts_ref: relativeToNmsRoot(storage, errorArtifact)
+      }
+    };
+    const auditRef = recordCommandAudit(storage, {
+      command: "night",
+      triggeredBy: "/nms-night",
+      policyProfile,
+      inputSummary: options.taskFile ?? "(missing task-file)",
+      fileScope: options.taskFile ? [options.taskFile] : [],
+      gateResult: "CONFIG_ERROR",
+      artifactPaths: [relativeToNmsRoot(storage, errorArtifact)],
+      notes: [reason]
+    });
+    return JSON.stringify({ ...payload, audit_artifact: auditRef }, null, 2);
+  }
   const report = runNightHarness({
     dryRun,
     apply,
+    policyProfile,
     explain: Boolean(options.explain),
     plannerInput,
     timeBudgetMinutes: options.timeBudget ?? 5
@@ -1169,7 +1924,21 @@ export function nightCommand(options: {
     report.logs.push("Auto planner generated from route defaults or --task. Review and persist a task-file before apply.");
   }
   storage.trackPerf("night_ms", Number((performance.now() - started).toFixed(2)));
-  storage.recordNightRun(report);
+  const artifactPath = storage.recordNightRun(report);
+  const auditRef = recordCommandAudit(storage, {
+    command: "night",
+    triggeredBy: "/nms-night",
+    policyProfile,
+    inputSummary: plannerInput?.task ?? "(missing task)",
+    fileScope: plannerInput?.files ?? [],
+    gateResult: report.final_state,
+    artifactPaths: [relativeToNmsRoot(storage, artifactPath)],
+    notes: report.failure
+      ? [report.failure.failure_reason, report.failure.next_safe_command]
+      : report.logs.slice(-2)
+  });
+  report.audit_artifact = auditRef;
+  writeJsonArtifact(artifactPath, report);
   return JSON.stringify(report, null, 2);
 }
 
@@ -1275,7 +2044,11 @@ export function doctorCommand(): string {
     "events",
     "sessions",
     "derived",
+    "audit",
+    "inbox",
     path.join("artifacts", "artifacts.json"),
+    path.join("artifacts", "auto"),
+    path.join("artifacts", "errors"),
     path.join("policies", "safety.json"),
     path.join("domains", "coding.json")
   ];
@@ -1310,6 +2083,16 @@ export function doctorCommand(): string {
       detail: `${host.status}; invoke=${host.invocation[0]}; fix=${host.fix_hint}`
     });
   }
+  checks.push({
+    check: "Policy Profiles",
+    status: "PASS",
+    detail: Object.keys(DEFAULT_CONFIG.harness.policy_profiles).join(", ")
+  });
+  checks.push({
+    check: "Audit Trail",
+    status: countFiles(path.join(storage.root, "audit"), ".jsonl") > 0 ? "PASS" : "WARN",
+    detail: `audit_files=${countFiles(path.join(storage.root, "audit"), ".jsonl")}, error_artifacts=${countFiles(path.join(storage.root, "artifacts", "errors"), ".json")}`
+  });
 
   const lines = ["== NMS Doctor ==", ...checks.map((c) => `[${c.status}] ${c.check}: ${c.detail}`)];
   return lines.join("\n");
@@ -1574,14 +2357,25 @@ export async function reportCommand(options?: {
   if (options?.format === "json") {
     const reportPath = path.join(reportDir, "report.json");
     fs.writeFileSync(reportPath, JSON.stringify(reportPayload, null, 2), "utf8");
+    const reportRef = path.relative(storage.root, reportPath).replaceAll("\\", "/");
     storage.recordArtifact({
       type: "report",
-      path: path.relative(storage.root, reportPath).replaceAll("\\", "/"),
+      path: reportRef,
       source_data_hash: sourceHash,
       real_data_only: options.realOnly ?? true,
       metadata: { format: "json", period, template }
     });
-    storage.recordEvent("REPORT_GENERATED", path.relative(storage.root, reportPath).replaceAll("\\", "/"), sourceHash);
+    storage.recordEvent("REPORT_GENERATED", reportRef, sourceHash);
+    recordCommandAudit(storage, {
+      command: "report",
+      triggeredBy: "/nms-report",
+      policyProfile: "normal",
+      inputSummary: `report ${period} ${template}`,
+      fileScope: [],
+      gateResult: reportSessions.length === 0 ? "EMPTY_STATE" : "OK",
+      artifactPaths: [reportRef],
+      notes: [`sample_count=${reportSessions.length}`]
+    });
     return reportPath;
   }
 
@@ -1635,162 +2429,135 @@ ${imageNotes.map((n) => `- ${n}`).join("\n")}
 `;
 
   if (options?.format === "html") {
-    const maxSkill = Math.max(1, ...topSkills.map(([, count]) => count));
-    const maxDomain = Math.max(1, ...topDomains.map(([, count]) => count));
     const mainWorkflowSteps = topWorkflows[0]?.[0].split(" -> ") ?? [];
-    const html = `<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NMS Agent Daily Report</title>
-  <style>
-    :root { color-scheme: dark; --bg:#070911; --panel:rgba(17,24,39,.78); --line:rgba(148,163,184,.24); --text:#eef2ff; --muted:#94a3b8; --cyan:#22d3ee; --green:#34d399; --amber:#fbbf24; --red:#fb7185; --blue:#60a5fa; }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: "Aptos Display", "Segoe UI", "PingFang SC", sans-serif; background: radial-gradient(circle at 8% 4%, rgba(34,211,238,.24), transparent 30%), radial-gradient(circle at 86% 4%, rgba(251,191,36,.14), transparent 28%), linear-gradient(180deg,#090d18,#050711 62%); color: var(--text); }
-    main { max-width: 1180px; margin: 0 auto; padding: 48px 24px; }
-    .hero { border: 1px solid var(--line); border-radius: 32px; padding: 36px; background: linear-gradient(145deg, rgba(17,24,39,.94), rgba(15,23,42,.66)); box-shadow: 0 24px 90px rgba(0,0,0,.36); position: relative; overflow: hidden; }
-    .hero:after { content:""; position:absolute; width:260px; height:260px; right:-80px; top:-70px; border-radius:50%; background: radial-gradient(circle, rgba(34,211,238,.18), transparent 70%); }
-    .eyebrow { color: var(--cyan); letter-spacing: .16em; text-transform: uppercase; font-size: 12px; }
-    h1 { font-size: clamp(38px, 6vw, 78px); line-height: .94; margin: 16px 0; max-width: 900px; }
-    .subtitle { color: var(--muted); font-size: 18px; line-height: 1.7; max-width: 760px; }
-    .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 22px 0; }
-    .two { display:grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-    .card { border: 1px solid var(--line); border-radius: 24px; padding: 22px; background: var(--panel); box-shadow: 0 18px 60px rgba(0,0,0,.22); }
-    .metric { font-size: 36px; font-weight: 800; margin-top: 10px; }
-    .muted { color: var(--muted); }
-    section { margin-top: 22px; }
-    h2 { font-size: 24px; margin: 0 0 14px; }
-    .bar-row { margin: 16px 0; }
-    .bar-label { display: flex; justify-content: space-between; color: #dbeafe; margin-bottom: 8px; }
-    .bar { height: 13px; background: rgba(148,163,184,.16); border-radius: 999px; overflow: hidden; }
-    .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--green)); border-radius: inherit; }
-    .timeline { display: grid; gap: 12px; }
-    .step { display:flex; gap: 12px; align-items:flex-start; color:#dbeafe; }
-    .dot { width: 28px; height: 28px; border-radius: 50%; display:grid; place-items:center; background: rgba(34,211,238,.16); color: var(--cyan); border:1px solid rgba(34,211,238,.36); flex:0 0 auto; }
-    .path { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top: 12px; }
-    .node { border:1px solid rgba(34,211,238,.34); background:rgba(34,211,238,.12); color:#cffafe; padding:9px 12px; border-radius:999px; }
-    .arrow { color: var(--amber); }
-    .pill { display:inline-block; margin: 4px 6px 4px 0; border:1px solid rgba(96,165,250,.32); color:#bfdbfe; background:rgba(96,165,250,.1); padding:7px 10px; border-radius:999px; }
-    .source { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; margin-top: 18px; }
-    .warning { border-color: rgba(251,113,133,.35); background: rgba(127,29,29,.22); color: #fecdd3; }
-    img { width: 100%; border-radius: 18px; border: 1px solid var(--line); margin-top: 12px; }
-    @media (max-width: 900px) { .grid,.two { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 560px) { .grid,.two { grid-template-columns: 1fr; } main { padding: 24px 14px; } .hero { padding: 22px; } }
-  </style>
-</head>
-<body>
-<main>
-  <div class="hero">
-    <div class="eyebrow">No More Skill · Real Behavior Report</div>
-    <h1>你的工作方式，正在变成 Agent 可执行的操作系统。</h1>
-    <p class="subtitle">周期：${escapeHtml(period)}。本报告只读取本地 .nms 真实数据，按领域、技能、workflow 和安全建议组织，不补虚构指标。</p>
-    <div class="grid">
-      <div class="card"><div class="muted">真实样本</div><div class="metric">${reportSessions.length}</div></div>
-      <div class="card"><div class="muted">Behavior Score</div><div class="metric">${quality.behavior_score}</div></div>
-      <div class="card"><div class="muted">Workflow Confidence</div><div class="metric">${Math.round(quality.workflow_confidence * 100)}%</div></div>
-      <div class="card"><div class="muted">Stale Risk</div><div class="metric">${quality.stale_risk}%</div></div>
-    </div>
-  </div>
-  ${reportSessions.length === 0 ? `<section class="card warning"><h2>样本不足 / 数据不足</h2><p>当前周期没有足够真实 session。请先运行 <code>nms ingest --input input.json</code>，再生成报告。</p></section>` : ""}
-  <section class="two">
-    <div class="card">
-      <h2>领域分布</h2>
-      ${
-        topDomains.length > 0
-          ? topDomains
-              .map(
-                ([name, count]) => `<div class="bar-row"><div class="bar-label"><span>${escapeHtml(name)}</span><span>${count}</span></div><div class="bar"><span style="width:${Math.max(6, Math.round((count / maxDomain) * 100))}%"></span></div></div>`
-              )
-              .join("")
-          : `<p class="muted">暂无领域数据。</p>`
-      }
-    </div>
-    <div class="card">
-      <h2>Skill 使用频率</h2>
-      ${
-        topSkills.length > 0
-          ? topSkills
-              .map(
-                ([name, count]) => `<div class="bar-row"><div class="bar-label"><span>${escapeHtml(name)}</span><span>${count}</span></div><div class="bar"><span style="width:${Math.max(6, Math.round((count / maxSkill) * 100))}%"></span></div></div>`
-              )
-              .join("")
-          : `<p class="muted">暂无 skill 频率数据。</p>`
-      }
-      ${fs.existsSync(skillImg) ? `<img src="${path.relative(reportDir, skillImg).replaceAll("\\", "/")}" alt="skill frequency" />` : ""}
-    </div>
-  </section>
-  <section class="card">
-    <h2>主 Workflow 路径</h2>
-    <div class="path">
-      ${
-        mainWorkflowSteps.length > 0
-          ? mainWorkflowSteps.map((step, index) => `${index > 0 ? `<span class="arrow">→</span>` : ""}<span class="node">${escapeHtml(step)}</span>`).join("")
-          : `<p class="muted">暂无主 workflow。</p>`
-      }
-    </div>
-  </section>
-  <section class="card">
-    <h2>Workflow 排名与转移边</h2>
-    <div class="timeline">
-      ${
-        topWorkflows.length > 0
-          ? topWorkflows
-              .map(([wf, count], index) => `<div class="step"><div class="dot">${index + 1}</div><div><strong>${escapeHtml(wf)}</strong><div class="muted">出现 ${count} 次</div></div></div>`)
-              .join("")
-          : `<p class="muted">暂无可稳定复现的 workflow。</p>`
-      }
-    </div>
-    <div style="margin-top:14px">
-      ${
-        workflowEdges.length > 0
-          ? workflowEdges.map((edge) => `<span class="pill">${escapeHtml(edge.from)} → ${escapeHtml(edge.to)} · ${edge.count}</span>`).join("")
-          : `<p class="muted">暂无 workflow 转移边。</p>`
-      }
-    </div>
-    ${fs.existsSync(progressImg) ? `<img src="${path.relative(reportDir, progressImg).replaceAll("\\", "/")}" alt="work progress" />` : ""}
-  </section>
-  <section class="card">
-    <h2>用户风格与人格演化</h2>
-    <p>当前风格：<strong>${escapeHtml(db.user_profile.style)}</strong></p>
-    <p class="muted">Top Skills：${db.user_profile.top_skills.map(escapeHtml).join(", ") || "暂无"}</p>
-    <p class="muted">Top Workflows：${db.user_profile.top_workflows.map(escapeHtml).join(", ") || "暂无"}</p>
-    ${fs.existsSync(personaImg) ? `<img src="${path.relative(reportDir, personaImg).replaceAll("\\", "/")}" alt="persona evolution" />` : ""}
-  </section>
-  ${reportTemplateHtml(template, topDomains, topWorkflows)}
-  <section class="card">
-    <h2>下一步建议</h2>
-    <div class="step"><div class="dot">1</div><div><strong>继续采集真实工作流</strong><div class="muted">next: nms ingest --input input.json</div></div></div>
-    <div class="step"><div class="dot">2</div><div><strong>给 Agent 读取上下文</strong><div class="muted">next: nms context --task "你的任务" --format json</div></div></div>
-    <div class="step"><div class="dot">3</div><div><strong>先 dry-run 再执行</strong><div class="muted">next: nms night --dry-run --explain --task-file task.json</div></div></div>
-    <div class="source">数据来源：.nms/sessions + .nms/derived；报告产物已登记到 .nms/artifacts/artifacts.json。</div>
-  </section>
-</main>
-</body>
-</html>`;
+    const html = visualShell({
+      theme: "report",
+      title: "NMS Agent Report",
+      eyebrow: "No More Skill · Real Behavior Report",
+      headline: "你的工作方式，正在变成 Agent 可执行的操作系统。",
+      subtitle: `周期：${period}。本报告只读取本地 .nms 真实数据，把领域、技能、workflow、风险和可执行建议整理成一张可以展示的行为证据板。`,
+      metrics: [
+        { label: "真实样本", value: String(reportSessions.length), note: `周期 ${period}` },
+        { label: "Behavior Score", value: String(quality.behavior_score), note: "稳定度" },
+        { label: "Workflow Confidence", value: `${Math.round(quality.workflow_confidence * 100)}%`, note: "主流程置信度" },
+        { label: "Stale Risk", value: `${quality.stale_risk}%`, note: "样本陈旧风险" }
+      ],
+      body: `
+        ${reportSessions.length === 0 ? `<section class="card"><div class="callout warning"><strong>样本不足</strong><div class="muted">当前周期没有足够真实 session。请先运行 <code>nms ingest --input input.json</code>，再生成报告。</div></div></section>` : ""}
+        <section class="grid-2">
+          <div class="card">
+            <h2>领域分布 / Domain Mix</h2>
+            <p class="muted">用户最近把精力放在哪些领域。</p>
+            ${renderBarRows(topDomains.map(([name, count]) => ({ label: name, value: count })), "暂无领域数据。")}
+          </div>
+          <div class="card">
+            <h2>Skill 使用频率</h2>
+            <p class="muted">只统计真实会话里的 skill 使用频率。</p>
+            ${renderBarRows(topSkills.map(([name, count]) => ({ label: name, value: count })), "暂无 skill 频率数据。")}
+            ${fs.existsSync(skillImg) ? `<img src="${path.relative(reportDir, skillImg).replaceAll("\\", "/")}" alt="skill frequency" />` : ""}
+          </div>
+        </section>
+        <section class="grid-2">
+          <div class="card">
+            <h2>Workflow Path</h2>
+            <p class="muted">最稳定的主路径，适合作为 Agent 默认工作流。</p>
+            ${renderWorkflowPath(mainWorkflowSteps, "暂无主 workflow。")}
+            <div style="margin-top:14px">${renderPills(workflowEdges.map((edge) => `${edge.from} → ${edge.to} · ${edge.count}`), "暂无 workflow 转移边。", "neutral")}</div>
+          </div>
+          <div class="card">
+            <h2>Workflow 排名与转移边</h2>
+            <p class="muted">当前周期被重复验证过的流程排名。</p>
+            ${renderTimeline(
+              topWorkflows.map(([wf, count]) => ({
+                title: wf,
+                body: `出现 ${count} 次`
+              })),
+              "暂无可稳定复现的 workflow。"
+            )}
+            ${fs.existsSync(progressImg) ? `<img src="${path.relative(reportDir, progressImg).replaceAll("\\", "/")}" alt="work progress" />` : ""}
+          </div>
+        </section>
+        <section class="grid-2">
+          <div class="card">
+            <h2>Style & Evolution</h2>
+            <div class="list">
+              <div class="item">当前风格：${escapeHtml(db.user_profile.style)}</div>
+              <div class="item">Top Skills：${db.user_profile.top_skills.map(escapeHtml).join(", ") || "暂无"}</div>
+              <div class="item">Top Workflows：${db.user_profile.top_workflows.map(escapeHtml).join(", ") || "暂无"}</div>
+            </div>
+            ${fs.existsSync(personaImg) ? `<img src="${path.relative(reportDir, personaImg).replaceAll("\\", "/")}" alt="persona evolution" />` : ""}
+          </div>
+          <div class="card">
+            <h2>Risk Panel</h2>
+            ${renderTimeline(
+              [
+                { title: "样本新鲜度", body: quality.stale_risk >= 60 ? "当前偏陈旧，先补最近真实任务。" : "近期样本可用。" },
+                { title: "流程可信度", body: quality.workflow_confidence < 0.5 ? "保持建议态，不要当硬规则。" : "可以作为温和偏好继承。" },
+                { title: "系统健康", body: imageNotes.join("；") }
+              ],
+              "暂无风险信息。"
+            )}
+          </div>
+        </section>
+        ${reportTemplateHtml(template, topDomains, topWorkflows)}
+        <section class="card">
+          <h2>下一步建议</h2>
+          ${renderTimeline(
+            [
+              { title: "继续采集真实工作流", body: "next: nms ingest --input input.json" },
+              { title: "给 Agent 读取上下文", body: "next: nms context --task \\\"你的任务\\\" --format json" },
+              { title: "先 dry-run 再执行", body: "next: nms night --dry-run --explain --task-file task.json" }
+            ],
+            "暂无建议。"
+          )}
+          <div class="source">真实数据来源：<code>.nms/data.json</code>、<code>.nms/sessions</code>、<code>.nms/derived</code>。样本不足时只展示学习态，不补任何虚构 skill、workflow 或趋势。</div>
+        </section>`
+    });
     const reportPath = path.join(reportDir, "report.html");
     fs.writeFileSync(reportPath, html, "utf8");
+    const reportRef = path.relative(storage.root, reportPath).replaceAll("\\", "/");
     storage.recordArtifact({
       type: "report",
-      path: path.relative(storage.root, reportPath).replaceAll("\\", "/"),
+      path: reportRef,
       source_data_hash: sourceHash,
       real_data_only: options.realOnly ?? true,
       metadata: { format: "html", period, template }
     });
-    storage.recordEvent("REPORT_GENERATED", path.relative(storage.root, reportPath).replaceAll("\\", "/"), sourceHash);
+    storage.recordEvent("REPORT_GENERATED", reportRef, sourceHash);
+    recordCommandAudit(storage, {
+      command: "report",
+      triggeredBy: "/nms-report",
+      policyProfile: "normal",
+      inputSummary: `report ${period} ${template}`,
+      fileScope: [],
+      gateResult: reportSessions.length === 0 ? "EMPTY_STATE" : "OK",
+      artifactPaths: [reportRef],
+      notes: [`sample_count=${reportSessions.length}`]
+    });
     return reportPath;
   }
 
   const reportPath = path.join(reportDir, "report.md");
   fs.writeFileSync(reportPath, reportMd, "utf8");
+  const reportRef = path.relative(storage.root, reportPath).replaceAll("\\", "/");
   storage.recordArtifact({
     type: "report",
-    path: path.relative(storage.root, reportPath).replaceAll("\\", "/"),
+    path: reportRef,
     source_data_hash: sourceHash,
     real_data_only: options?.realOnly ?? true,
     metadata: { format: "md", period, template }
   });
-  storage.recordEvent("REPORT_GENERATED", path.relative(storage.root, reportPath).replaceAll("\\", "/"), sourceHash);
+  storage.recordEvent("REPORT_GENERATED", reportRef, sourceHash);
+  recordCommandAudit(storage, {
+    command: "report",
+    triggeredBy: "/nms-report",
+    policyProfile: "normal",
+    inputSummary: `report ${period} ${template}`,
+    fileScope: [],
+    gateResult: reportSessions.length === 0 ? "EMPTY_STATE" : "OK",
+    artifactPaths: [reportRef],
+    notes: [`sample_count=${reportSessions.length}`]
+  });
   return reportPath;
 }
 
@@ -1820,6 +2587,28 @@ export async function birthdayCommand(options?: {
   const currentQuality = reportQualityMetrics(currentSessions, currentCounts.workflowCounts);
   const previousQuality = reportQualityMetrics(previousSessions, previousCounts.workflowCounts);
   const topSkills = topEntries(currentCounts.skillCounts, 8);
+  const skillChanges = buildSkillChanges(currentCounts.skillCounts, previousCounts.skillCounts, 8);
+  const currentTopDomainInfo = topDomainInfo(currentCounts.domainCounts);
+  const previousTopDomainInfo = topDomainInfo(previousCounts.domainCounts);
+  const domainShift = {
+    current: currentTopDomainInfo.name,
+    previous: previousTopDomainInfo.name,
+    changed: currentTopDomainInfo.name !== previousTopDomainInfo.name,
+    signal:
+      currentSessions.length === 0
+        ? "样本不足，暂不判断领域迁移。"
+        : currentTopDomainInfo.name === previousTopDomainInfo.name
+          ? `领域重心仍然停留在 ${currentTopDomainInfo.name ?? "未知领域"}。`
+          : `领域重心从 ${previousTopDomainInfo.name ?? "未知领域"} 转向了 ${currentTopDomainInfo.name ?? "未知领域"}。`
+  };
+  const behaviorDelta = {
+    sample_count_delta: currentSessions.length - previousSessions.length,
+    behavior_score_delta: currentQuality.behavior_score - previousQuality.behavior_score,
+    workflow_confidence_delta: Number((currentQuality.workflow_confidence - previousQuality.workflow_confidence).toFixed(3)),
+    stale_risk_delta: currentQuality.stale_risk - previousQuality.stale_risk,
+    domain_shift: domainShift,
+    skill_changes: skillChanges
+  };
   const previousSkillNames = new Set(Object.keys(previousCounts.skillCounts));
   const emergingSkills = topSkills
     .filter(([name, count]) => !previousSkillNames.has(name) || count > (previousCounts.skillCounts[name] ?? 0))
@@ -1829,6 +2618,15 @@ export async function birthdayCommand(options?: {
   const topDomains = topEntries(currentCounts.domainCounts, 4);
   const topDomain = topDomains[0]?.[0];
   const topWorkflow = stableWorkflows[0];
+  const personalityTags = derivePersonalityTags({
+    currentSkillCounts: currentCounts.skillCounts,
+    previousSkillCounts: previousCounts.skillCounts,
+    currentDomainCounts: currentCounts.domainCounts,
+    previousDomainCounts: previousCounts.domainCounts,
+    currentQuality,
+    previousQuality,
+    sampleCount: currentSessions.length
+  });
   const northStar = topDomain
     ? `把 ${topDomain} 里的真实工作方式继续沉淀成 Agent 可执行资产。`
     : "先积累真实行为样本，让 Agent 学会你的工作方式，而不是靠猜。";
@@ -1842,6 +2640,15 @@ export async function birthdayCommand(options?: {
           ? `出现新的高频能力信号：${emergingSkills.join(", ")}。`
           : "暂无新的高频能力信号，继续采集真实使用数据。"
       ];
+  const evolutionSummary = buildEvolutionSummary({
+    sampleCount: currentSessions.length,
+    previousSampleCount: previousSessions.length,
+    currentQuality,
+    previousQuality,
+    domainShift,
+    skillChanges,
+    tags: personalityTags
+  });
   const retainedCommitments = [
     "只使用真实 .nms 数据，不编造技能频率、workflow 或人格结论。",
     "继续默认 dry-run + Gate，不跳过测试和审查。",
@@ -1857,6 +2664,13 @@ export async function birthdayCommand(options?: {
     emergingSkills[0] ? `围绕「${emergingSkills[0]}」设计 30 天实践闭环。` : "让每次重要任务都留下可复盘的 .nms 行为记录。",
     "让 /nms-auto 默认继承 birthday memory，同时保持显式 apply 边界。"
   ];
+  const evolutionLanes = buildEvolutionLanes({
+    topWorkflow,
+    personalityTags,
+    skillChanges,
+    currentQuality,
+    currentTopDomain: currentTopDomainInfo.name
+  });
   const growthVectors = [
     {
       name: "行为稳定度",
@@ -1900,7 +2714,7 @@ export async function birthdayCommand(options?: {
     previousQuality
   }));
   const capsule: BirthdayCapsule = {
-    schema_version: 1,
+    schema_version: 2,
     generated_at: generatedAt,
     project_id: storage.buildAgentContext().project_id,
     period_days: periodDays,
@@ -1911,6 +2725,10 @@ export async function birthdayCommand(options?: {
     stable_workflows: stableWorkflows,
     emerging_skills: emergingSkills,
     changed_habits: changedHabits,
+    personality_tags: personalityTags,
+    evolution_summary: evolutionSummary,
+    behavior_delta: behaviorDelta,
+    evolution_lanes: evolutionLanes,
     growth_vectors: growthVectors,
     risks_to_watch: risksToWatch,
     next_year_targets: nextYearTargets,
@@ -1918,6 +2736,7 @@ export async function birthdayCommand(options?: {
       "Read birthday_memory from nms context before personalized work.",
       "Preserve north_star unless the user explicitly changes it.",
       "Treat next_year_targets as long-term guidance, not hard requirements.",
+      "Use evolution_summary, behavior_delta, and evolution_lanes as soft longitudinal hints, not absolute truth.",
       "Never use birthday narrative to bypass safety, review, tests, or real-data constraints."
     ],
     artifacts: {
@@ -1930,8 +2749,8 @@ export async function birthdayCommand(options?: {
 
   const posterPrompt = [
     "生成一张 NMS birthday memory poster，主题是“每天重启，但不忘北极星”。",
-    `必须只使用真实数据：sample_count=${capsule.sample_count}, behavior_score=${currentQuality.behavior_score}, workflows=${stableWorkflows.join(" | ") || "样本不足"}, skills=${topSkills.map(([name, count]) => `${name}:${count}`).join(" | ") || "样本不足"}.`,
-    "画面风格：未来感控制台、温暖生日仪式、Agent 记忆胶囊、中文标题“NMS Birthday”。",
+    `必须只使用真实数据：sample_count=${capsule.sample_count}, behavior_score=${currentQuality.behavior_score}, workflow_confidence_delta=${behaviorDelta.workflow_confidence_delta}, stale_risk_delta=${behaviorDelta.stale_risk_delta}, workflows=${stableWorkflows.join(" | ") || "样本不足"}, skills=${topSkills.map(([name, count]) => `${name}:${count}`).join(" | ") || "样本不足"}, tags=${personalityTags.join(" | ") || "样本不足"}.`,
+    "画面风格：未来感控制台、温暖生日仪式、Agent 记忆胶囊、中文标题“NMS Birthday”、North Star、三栏进化资产。",
     "如果样本不足，画面必须标注“样本不足，正在学习”。不要编造额外 skill 或人格结论。"
   ].join("\n");
   if (options?.image) {
@@ -1986,9 +2805,38 @@ ${stableWorkflows.map((item) => `- ${item}`).join("\n") || "- 样本不足，暂
 
 ${emergingSkills.map((item) => `- ${item}`).join("\n") || "- 暂无新高频 skill。"}
 
+## Personality Tags
+
+${personalityTags.map((item) => `- ${item}`).join("\n") || "- 暂无足够信号判断变化标签。"}
+
+## Evolution Summary
+
+- ${evolutionSummary.headline}
+${evolutionSummary.narrative.map((item) => `- ${item}`).join("\n")}
+
+## Behavior Delta
+
+- Sample Delta: ${signedDelta(behaviorDelta.sample_count_delta)}
+- Behavior Score Delta: ${signedDelta(behaviorDelta.behavior_score_delta)}
+- Workflow Confidence Delta: ${signedDelta(behaviorDelta.workflow_confidence_delta * 100, 1)}pt
+- Stale Risk Delta: ${signedDelta(behaviorDelta.stale_risk_delta)}pt
+- Domain Shift: ${behaviorDelta.domain_shift.signal}
+${behaviorDelta.skill_changes.map((item) => `- ${item.name}: ${item.previous} -> ${item.current} (${signedDelta(item.delta)})`).join("\n") || "- 暂无显著 skill 变化。"}
+
 ## Changed Habits
 
 ${changedHabits.map((item) => `- ${item}`).join("\n")}
+
+## Inherit / Retire / New
+
+### Inherit
+${evolutionLanes.inherit_keep.map((item) => `- ${item}`).join("\n")}
+
+### Retire
+${evolutionLanes.retire_stop.map((item) => `- ${item}`).join("\n")}
+
+### New
+${evolutionLanes.new_growth.map((item) => `- ${item}`).join("\n")}
 
 ## Next Year Targets
 
@@ -2000,92 +2848,109 @@ ${capsule.agent_instructions.map((item) => `- ${item}`).join("\n")}
 `;
   fs.writeFileSync(mdPath, md, "utf8");
 
-  const html = `<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NMS Birthday Memory Capsule</title>
-  <style>
-    :root { color-scheme: dark; --bg:#05070d; --panel:rgba(15,23,42,.78); --line:rgba(148,163,184,.24); --text:#eef2ff; --muted:#9ca3af; --cyan:#22d3ee; --gold:#fbbf24; --green:#34d399; --rose:#fb7185; }
-    * { box-sizing: border-box; }
-    body { margin:0; font-family:"Aptos Display","Segoe UI","PingFang SC",sans-serif; background: radial-gradient(circle at 12% 4%, rgba(34,211,238,.25), transparent 30%), radial-gradient(circle at 88% 0%, rgba(251,191,36,.18), transparent 26%), linear-gradient(180deg,#080b16,#03050a 70%); color:var(--text); }
-    main { max-width:1180px; margin:0 auto; padding:48px 22px; }
-    .hero,.card { border:1px solid var(--line); background:var(--panel); border-radius:30px; box-shadow:0 24px 90px rgba(0,0,0,.35); }
-    .hero { padding:38px; overflow:hidden; position:relative; }
-    .hero:after { content:""; position:absolute; inset:auto -90px -90px auto; width:280px; height:280px; border-radius:50%; background:radial-gradient(circle, rgba(251,191,36,.2), transparent 70%); }
-    .eyebrow { color:var(--cyan); letter-spacing:.16em; text-transform:uppercase; font-size:12px; }
-    h1 { font-size:clamp(40px,6vw,82px); line-height:.92; margin:14px 0; max-width:900px; }
-    .subtitle { color:var(--muted); font-size:18px; line-height:1.7; max-width:760px; }
-    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin:22px 0; }
-    .two { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
-    .card { padding:24px; margin-top:18px; }
-    .metric { font-size:36px; font-weight:850; margin-top:8px; }
-    .muted { color:var(--muted); }
-    h2 { margin:0 0 14px; font-size:24px; }
-    .pulse { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--green); box-shadow:0 0 26px var(--green); margin-right:8px; }
-    .node { border:1px solid rgba(34,211,238,.35); background:rgba(34,211,238,.1); color:#cffafe; padding:9px 12px; border-radius:999px; display:inline-block; margin:5px; }
-    .target { border-left:4px solid var(--gold); padding:12px 14px; background:rgba(251,191,36,.08); border-radius:16px; margin:10px 0; }
-    .risk { border-left:4px solid var(--rose); padding:12px 14px; background:rgba(251,113,133,.08); border-radius:16px; margin:10px 0; }
-    .list { display:grid; gap:10px; }
-    .item { padding:12px 14px; border:1px solid var(--line); border-radius:16px; background:rgba(2,6,23,.28); }
-    img { width:100%; border-radius:22px; border:1px solid var(--line); margin-top:16px; }
-    code { color:#cffafe; }
-    @media (max-width:900px){ .grid,.two{ grid-template-columns:repeat(2,1fr);} }
-    @media (max-width:560px){ main{padding:24px 14px}.grid,.two{ grid-template-columns:1fr}.hero{padding:24px} }
-  </style>
-</head>
-<body>
-<main>
-  <section class="hero">
-    <div class="eyebrow"><span class="pulse"></span>NMS Birthday · Living Agent Asset</div>
-    <h1>每天重启，但不忘北极星。</h1>
-    <p class="subtitle">这不是一份生日总结，而是一枚会被后续 Agent 读取的记忆胶囊。它保留目标、边界和可继承经验，让下一次 /nms-auto 不从零开始。</p>
-    <div class="grid">
-      <div class="card"><div class="muted">本周期真实样本</div><div class="metric">${capsule.sample_count}</div></div>
-      <div class="card"><div class="muted">上周期样本</div><div class="metric">${capsule.previous_sample_count}</div></div>
-      <div class="card"><div class="muted">Behavior Score</div><div class="metric">${currentQuality.behavior_score}</div></div>
-      <div class="card"><div class="muted">Workflow Confidence</div><div class="metric">${Math.round(currentQuality.workflow_confidence * 100)}%</div></div>
-    </div>
-  </section>
-  ${capsule.sample_count === 0 ? `<section class="card risk"><h2>样本不足</h2><p>当前没有足够真实 session。NMS 不会编造生日画像，只会保留目标和安全边界。</p></section>` : ""}
-  <section class="card">
-    <h2>North Star</h2>
-    <div class="target">${escapeHtml(capsule.north_star)}</div>
-  </section>
-  <section class="two">
-    <div class="card">
-      <h2>保留下来的承诺</h2>
-      <div class="list">${capsule.retained_commitments.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
-    </div>
-    <div class="card">
-      <h2>下一岁路线图</h2>
-      <div class="list">${capsule.next_year_targets.map((item) => `<div class="target">${escapeHtml(item)}</div>`).join("")}</div>
-    </div>
-  </section>
-  <section class="card">
-    <h2>稳定 Workflow</h2>
-    ${capsule.stable_workflows.length > 0 ? capsule.stable_workflows.map((item) => `<span class="node">${escapeHtml(item)}</span>`).join("") : `<p class="muted">暂无稳定 workflow，先通过真实 ingest 继续学习。</p>`}
-  </section>
-  <section class="two">
-    <div class="card">
-      <h2>新出现的能力信号</h2>
-      <div class="list">${capsule.emerging_skills.length > 0 ? capsule.emerging_skills.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("") : `<div class="item">暂无新高频 skill。</div>`}</div>
-    </div>
-    <div class="card">
-      <h2>需要警惕的风险</h2>
-      <div class="list">${capsule.risks_to_watch.map((item) => `<div class="risk">${escapeHtml(item)}</div>`).join("")}</div>
-    </div>
-  </section>
-  <section class="card">
-    <h2>Agent 会继承什么</h2>
-    <div class="list">${capsule.agent_instructions.map((item) => `<div class="item"><code>${escapeHtml(item)}</code></div>`).join("")}</div>
-    <p class="muted">Capsule: ${escapeHtml(capsule.artifacts.capsule_ref)} · Markdown: ${escapeHtml(capsule.artifacts.markdown_ref)}</p>
-  </section>
-  ${fs.existsSync(posterPath) ? `<section class="card"><h2>Birthday Poster</h2><img src="${path.relative(reportDir, posterPath).replaceAll("\\", "/")}" alt="birthday poster" /></section>` : ""}
-</main>
-</body>
-</html>`;
+  const html = visualShell({
+    theme: "birthday",
+    title: "NMS Birthday Memory Capsule",
+    eyebrow: "NMS Birthday · Living Agent Asset",
+    headline: "每天重启，但不忘北极星。",
+    subtitle: "这不是一次性的生日总结，而是一枚会被后续 Agent 读取的长期记忆资产。它记录你今年真正变成了什么、该停下什么、以及下一岁准备把什么长出来。",
+    metrics: [
+      { label: "本周期样本", value: String(capsule.sample_count), note: `较上周期 ${signedDelta(behaviorDelta.sample_count_delta)}` },
+      { label: "Behavior Score", value: String(currentQuality.behavior_score), note: `${signedDelta(behaviorDelta.behavior_score_delta)}` },
+      { label: "Workflow Confidence", value: `${Math.round(currentQuality.workflow_confidence * 100)}%`, note: `${signedDelta(behaviorDelta.workflow_confidence_delta * 100, 1)}pt` },
+      { label: "Stale Risk", value: `${currentQuality.stale_risk}%`, note: `${signedDelta(behaviorDelta.stale_risk_delta)}pt` }
+    ],
+    body: `
+      ${capsule.sample_count === 0 ? `<section class="card"><div class="callout warning"><strong>样本不足</strong><div class="muted">当前没有足够真实 session。NMS 不会编造生日画像，只会保留目标、边界和学习方向。</div></div></section>` : ""}
+      <section class="card">
+        <h2>North Star</h2>
+        <div class="item">${escapeHtml(capsule.north_star)}</div>
+      </section>
+      <section class="grid-2">
+        <div class="card">
+          <h2>Evolution Summary</h2>
+          <div class="item">${escapeHtml(evolutionSummary.headline)}</div>
+          ${renderTimeline(
+            evolutionSummary.narrative.map((item, index) => ({
+              title: `Signal ${index + 1}`,
+              body: item
+            })),
+            "暂无进化总结。"
+          )}
+        </div>
+        <div class="card">
+          <h2>人格变化标签</h2>
+          <p class="muted">只在有真实证据时打标签，不做空想人格分析。</p>
+          <div>${renderPills(personalityTags, "暂无足够信号判断变化标签。")}</div>
+          <div style="margin-top:14px">${renderPills(capsule.changed_habits, "暂无习惯变化提示。", "neutral")}</div>
+        </div>
+      </section>
+      <section class="grid-2">
+        <div class="card">
+          <h2>Behavior Delta</h2>
+          ${renderTimeline(
+            [
+              { title: "技能变化", body: skillChanges[0] ? `${skillChanges[0].name}: ${skillChanges[0].previous} -> ${skillChanges[0].current} (${signedDelta(skillChanges[0].delta)})` : "暂无显著技能变化。" },
+              { title: "Workflow 稳定度", body: `${Math.round(previousQuality.workflow_confidence * 100)}% -> ${Math.round(currentQuality.workflow_confidence * 100)}%` },
+              { title: "领域重心", body: behaviorDelta.domain_shift.signal },
+              { title: "陈旧风险", body: `${previousQuality.stale_risk}% -> ${currentQuality.stale_risk}%` }
+            ],
+            "暂无差分数据。"
+          )}
+        </div>
+        <div class="card">
+          <h2>稳定 Workflow 与新信号</h2>
+          ${renderWorkflowPath(capsule.stable_workflows, "暂无稳定 workflow，先通过真实 ingest 继续学习。")}
+          <div style="margin-top:14px">${renderPills(capsule.emerging_skills, "暂无新高频 skill。")}</div>
+          <div class="source">领域迁移：${escapeHtml(behaviorDelta.domain_shift.signal)}</div>
+        </div>
+      </section>
+      <section class="grid-3">
+        <div class="lane keep">
+          <h2>继承</h2>
+          <div class="list">${capsule.evolution_lanes.inherit_keep.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+        </div>
+        <div class="lane stop">
+          <h2>放弃</h2>
+          <div class="list">${capsule.evolution_lanes.retire_stop.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+        </div>
+        <div class="lane new">
+          <h2>新生</h2>
+          <div class="list">${capsule.evolution_lanes.new_growth.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+        </div>
+      </section>
+      <section class="grid-2">
+        <div class="card">
+          <h2>保留下来的承诺</h2>
+          <div class="list">${capsule.retained_commitments.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+        </div>
+        <div class="card">
+          <h2>下一岁路线图</h2>
+          <div class="list">${capsule.next_year_targets.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+        </div>
+      </section>
+      <section class="grid-2">
+        <div class="card">
+          <h2>Risk Panel</h2>
+          ${renderTimeline(
+            capsule.risks_to_watch.map((item, index) => ({
+              title: `Risk ${index + 1}`,
+              body: item
+            })),
+            "暂无风险提醒。"
+          )}
+        </div>
+        <div class="card">
+          <h2>Agent 会继承什么</h2>
+          <div class="list">${capsule.agent_instructions.map((item) => `<div class="item"><code>${escapeHtml(item)}</code></div>`).join("")}</div>
+          <div class="source">Capsule: ${escapeHtml(capsule.artifacts.capsule_ref)} · Markdown: ${escapeHtml(capsule.artifacts.markdown_ref)} · HTML: ${escapeHtml(capsule.artifacts.html_report_ref)}</div>
+        </div>
+      </section>
+      ${fs.existsSync(posterPath) ? `<section class="card"><h2>Birthday Poster</h2><img src="${path.relative(reportDir, posterPath).replaceAll("\\", "/")}" alt="birthday poster" /></section>` : ""}
+      <section class="card">
+        <div class="source">真实数据来源：<code>.nms/data.json</code>、<code>.nms/sessions</code>、<code>.nms/derived/birthday/latest.json</code>。生日资产会被 <code>/nms-auto</code> 作为长期提示继承，但不会覆盖安全边界。</div>
+      </section>`
+  });
   fs.writeFileSync(htmlPath, html, "utf8");
   storage.recordArtifact({
     type: "context",
@@ -2102,10 +2967,26 @@ ${capsule.agent_instructions.map((item) => `- ${item}`).join("\n")}
     metadata: { kind: "birthday-report", format: "html", period_days: periodDays }
   });
   storage.recordEvent("REPORT_GENERATED", capsule.artifacts.html_report_ref, sourceHash);
+  const birthdayAuditRef = recordCommandAudit(storage, {
+    command: "birthday",
+    triggeredBy: "/nms-birthday",
+    policyProfile: "normal",
+    inputSummary: `birthday period=${periodDays}`,
+    fileScope: [],
+    gateResult: capsule.sample_count === 0 ? "EMPTY_STATE" : "OK",
+    artifactPaths: [
+      capsule.artifacts.capsule_ref,
+      capsule.artifacts.html_report_ref,
+      capsule.artifacts.markdown_ref,
+      ...(capsule.artifacts.poster_ref ? [capsule.artifacts.poster_ref] : [])
+    ],
+    notes: [capsule.evolution_summary.headline]
+  });
 
   const payload = {
     generated_at: generatedAt,
     capsule,
+    audit_artifact: birthdayAuditRef,
     paths: {
       capsule: capsulePath,
       history: capsuleHistoryPath,
@@ -2121,6 +3002,8 @@ ${capsule.agent_instructions.map((item) => `- ${item}`).join("\n")}
     "Mode: living memory capsule + birthday report",
     `North Star: ${capsule.north_star}`,
     `Samples: ${capsule.sample_count}`,
+    `Evolution: ${capsule.evolution_summary.headline}`,
+    `Tags: ${capsule.personality_tags.join(", ") || "(not enough data yet)"}`,
     `Stable Workflow: ${capsule.stable_workflows[0] ?? "(not enough data yet)"}`,
     `Next Target: ${capsule.next_year_targets[0]}`,
     `Capsule: ${capsulePath}`,

@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import type {
   AgentContext,
   ArtifactRecord,
+  AuditRecord,
   BirthdayCapsule,
   Database,
   NmsEvent,
@@ -285,6 +286,67 @@ export class JsonStorage {
     return full;
   }
 
+  recordAudit(record: Omit<AuditRecord, "audit_id" | "created_at"> & { audit_id?: string; created_at?: string }): string {
+    const full: AuditRecord = {
+      audit_id: record.audit_id ?? `audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      created_at: record.created_at ?? new Date().toISOString(),
+      command: record.command,
+      triggered_by: record.triggered_by,
+      policy_profile: record.policy_profile,
+      input_summary: record.input_summary,
+      file_scope: record.file_scope,
+      gate_result: record.gate_result,
+      artifact_paths: record.artifact_paths,
+      notes: record.notes
+    };
+    const auditPath = path.join(this.root, "audit", `${full.created_at.slice(0, 7)}.jsonl`);
+    fs.mkdirSync(path.dirname(auditPath), { recursive: true });
+    fs.appendFileSync(auditPath, `${JSON.stringify(full)}\n`, "utf8");
+    this.recordArtifact({
+      type: "audit",
+      path: relativeToRoot(this.root, auditPath),
+      source_data_hash: sha256(JSON.stringify(full)),
+      real_data_only: true,
+      metadata: {
+        command: full.command,
+        gate_result: full.gate_result,
+        policy_profile: full.policy_profile
+      }
+    });
+    return relativeToRoot(this.root, auditPath);
+  }
+
+  recordErrorArtifact(payload: {
+    kind: string;
+    source: string;
+    reason: string;
+    recovery_hint: string;
+    next_safe_command: string;
+    input_summary?: string;
+  }): string {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filePath = path.join(this.root, "artifacts", "errors", `${payload.kind}-${stamp}.json`);
+    atomicWrite(
+      filePath,
+      JSON.stringify(
+        {
+          created_at: new Date().toISOString(),
+          ...payload
+        },
+        null,
+        2
+      )
+    );
+    this.recordArtifact({
+      type: "error",
+      path: relativeToRoot(this.root, filePath),
+      source_data_hash: sha256(JSON.stringify(payload)),
+      real_data_only: true,
+      metadata: { kind: payload.kind, source: payload.source }
+    });
+    return filePath;
+  }
+
   recordEvent(type: NmsEvent["type"], payloadRef: string, inputHash: string, sourceTool: SourceToolName = "codex"): NmsEvent {
     const event: NmsEvent = {
       event_id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -333,6 +395,29 @@ export class JsonStorage {
         generated_at: capsule.generated_at,
         north_star: capsule.north_star,
         retained_commitments: capsule.retained_commitments,
+        personality_tags: capsule.personality_tags ?? [],
+        evolution_summary: capsule.evolution_summary ?? {
+          headline: "生日资产仍在学习中。",
+          narrative: ["样本不足时，NMS 只保留北极星和边界，不做夸张归纳。"]
+        },
+        behavior_delta: capsule.behavior_delta ?? {
+          sample_count_delta: 0,
+          behavior_score_delta: 0,
+          workflow_confidence_delta: 0,
+          stale_risk_delta: 0,
+          domain_shift: {
+            current: null,
+            previous: null,
+            changed: false,
+            signal: "样本不足，暂不判断领域迁移。"
+          },
+          skill_changes: []
+        },
+        evolution_lanes: capsule.evolution_lanes ?? {
+          inherit_keep: capsule.retained_commitments ?? [],
+          retire_stop: [],
+          new_growth: capsule.next_year_targets ?? []
+        },
         next_year_targets: capsule.next_year_targets,
         risks_to_watch: capsule.risks_to_watch
       };
@@ -384,6 +469,7 @@ export class JsonStorage {
         default_apply: false,
         requires_explicit_apply: true,
         allowed_write_roots: DEFAULT_CONFIG.harness.allowed_roots,
+        policy_profile: "normal",
         blocked_patterns: [".env", "secret", "token", "password", "private"]
       },
       data_quality: {
@@ -406,6 +492,12 @@ export class JsonStorage {
       path.join("artifacts", "images"),
       path.join("artifacts", "prompts"),
       path.join("artifacts", "night-runs"),
+      path.join("artifacts", "auto"),
+      path.join("artifacts", "errors"),
+      "audit",
+      "inbox",
+      path.join("inbox", "archive"),
+      path.join("inbox", "failed"),
       "policies",
       "domains",
       "backups"
@@ -421,7 +513,8 @@ export class JsonStorage {
       default_apply: false,
       requires_explicit_apply: true,
       allowed_write_roots: DEFAULT_CONFIG.harness.allowed_roots,
-      core_explicit_whitelist: DEFAULT_CONFIG.harness.core_explicit_whitelist
+      core_explicit_whitelist: DEFAULT_CONFIG.harness.core_explicit_whitelist,
+      policy_profiles: DEFAULT_CONFIG.harness.policy_profiles
     });
     this.writeIfMissing(path.join("policies", "redaction.json"), {
       enabled: true,

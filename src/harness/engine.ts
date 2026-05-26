@@ -7,6 +7,7 @@ import type {
   ExecutorOutput,
   FailureModel,
   NightReport,
+  PolicyProfileName,
   PolicyLogEntry,
   PlannerOutput,
   ReviewerOutput,
@@ -21,6 +22,7 @@ function makeFailure(
   code: FailureModel["code"],
   reason: string,
   hint: string,
+  nextSafeCommand: string,
   retry: number,
   nonRetryable: boolean,
   state: State,
@@ -30,6 +32,7 @@ function makeFailure(
     code,
     failure_reason: reason,
     recovery_hint: hint,
+    next_safe_command: nextSafeCommand,
     retry_count: retry,
     non_retryable: nonRetryable,
     state_at_failure: state,
@@ -166,6 +169,7 @@ export interface NightOptions {
   dryRun: boolean;
   apply: boolean;
   timeBudgetMinutes: number;
+  policyProfile?: PolicyProfileName;
   explain?: boolean;
   plannerInput?: PlannerOutput;
   cwd?: string;
@@ -173,6 +177,7 @@ export interface NightOptions {
 
 export function runNightHarness(opts: NightOptions): NightReport {
   const cwd = opts.cwd ?? process.cwd();
+  const policyProfile = opts.policyProfile ?? "strict";
   const logs: string[] = [];
   const stateLogs: StateLogEntry[] = [];
   const policyLogs: PolicyLogEntry[] = [];
@@ -190,10 +195,11 @@ export function runNightHarness(opts: NightOptions): NightReport {
       final_state: S.ROLLBACK,
       retries,
       logs: [message],
+      policy_profile: policyProfile,
       policy_logs: policyLogs,
       state_logs: stateLogs,
       explain_chain: opts.explain ? explainChain : undefined,
-      failure: makeFailure("CONFIG_ERROR", message, "Provide a valid --task-file JSON.", 0, true, S.PLAN, "task-file")
+      failure: makeFailure("CONFIG_ERROR", message, "Provide a valid --task-file JSON.", "nms doctor", 0, true, S.PLAN, "task-file")
     };
   }
   const plannerInput = plannerFromInput(opts.plannerInput);
@@ -205,10 +211,11 @@ export function runNightHarness(opts: NightOptions): NightReport {
       final_state: S.ROLLBACK,
       retries,
       logs: [...logs, "Cannot use --apply with --dry-run at the same time."],
+      policy_profile: policyProfile,
       policy_logs: policyLogs,
       state_logs: stateLogs,
       explain_chain: opts.explain ? explainChain : undefined,
-      failure: makeFailure("CONFIG_ERROR", "Conflicting flags", "Use either --dry-run or --apply", 0, true, S.PLAN, "flags")
+      failure: makeFailure("CONFIG_ERROR", "Conflicting flags", "Use either --dry-run or --apply", "nms night --dry-run --task-file task.json", 0, true, S.PLAN, "flags")
     };
   }
   if (opts.apply && !isGitRepo(cwd)) {
@@ -218,10 +225,11 @@ export function runNightHarness(opts: NightOptions): NightReport {
       final_state: S.ROLLBACK,
       retries,
       logs: [...logs, "Current directory is not a git repository."],
+      policy_profile: policyProfile,
       policy_logs: policyLogs,
       state_logs: stateLogs,
       explain_chain: opts.explain ? explainChain : undefined,
-      failure: makeFailure("CONFIG_ERROR", "Not a git repository", "Initialize git repository first.", 0, true, S.PLAN, cwd)
+      failure: makeFailure("CONFIG_ERROR", "Not a git repository", "Initialize git repository first.", "git init", 0, true, S.PLAN, cwd)
     };
   }
 
@@ -242,7 +250,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
     t0 = Date.now();
     logs.push(`State=${state}`);
     const execOut = executor(plan, cwd);
-    const guard = validateWriteScope(execOut.files_modified, DEFAULT_CONFIG);
+    const guard = validateWriteScope(execOut.files_modified, DEFAULT_CONFIG, policyProfile);
     policyLogs.push({
       name: "write_scope_guard",
       status: guard.ok ? "pass" : "block",
@@ -262,6 +270,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
         final_state: S.ROLLBACK,
         retries,
         logs,
+        policy_profile: policyProfile,
         policy_logs: policyLogs,
         state_logs: stateLogs,
         explain_chain: opts.explain ? explainChain : undefined,
@@ -269,6 +278,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
           "POLICY_BLOCK",
           guard.reason ?? "Write guard denied",
           "Limit paths to policy-allowed files.",
+          "nms guard --format json",
           retries,
           true,
           S.EXECUTE,
@@ -325,6 +335,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
           final_state: S.GATE,
           retries,
           logs,
+          policy_profile: policyProfile,
           policy_logs: policyLogs,
           state_logs: stateLogs,
           explain_chain: opts.explain ? explainChain : undefined
@@ -337,6 +348,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
           final_state: S.ROLLBACK,
           retries,
           logs: [...logs, "Apply blocked on main branch."],
+          policy_profile: policyProfile,
           policy_logs: policyLogs,
           state_logs: stateLogs,
           explain_chain: opts.explain ? explainChain : undefined,
@@ -344,6 +356,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
             "POLICY_BLOCK",
             "Main branch commit forbidden",
             "Switch branch or let harness create night/dev-* branch.",
+            "git checkout -b feature/<name>",
             retries,
             true,
             S.COMMIT,
@@ -359,6 +372,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
         final_state: S.COMMIT,
         retries,
         logs,
+        policy_profile: policyProfile,
         policy_logs: policyLogs,
         state_logs: stateLogs,
         explain_chain: opts.explain ? explainChain : undefined
@@ -373,6 +387,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
         final_state: S.ROLLBACK,
         retries,
         logs,
+        policy_profile: policyProfile,
         policy_logs: policyLogs,
         state_logs: stateLogs,
         explain_chain: opts.explain ? explainChain : undefined,
@@ -380,6 +395,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
           testOut.passed ? "REVIEW_FAIL" : "TEST_FAIL",
           "Exceeded max retry",
           "Fix test/review issues and retry.",
+          testOut.passed ? "nms brief --profile strict" : "nms night --dry-run --explain --task-file task.json",
           retries,
           true,
           S.ROLLBACK,
@@ -394,6 +410,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
     final_state: S.ROLLBACK,
     retries,
     logs,
+    policy_profile: policyProfile,
     policy_logs: policyLogs,
     state_logs: stateLogs,
     explain_chain: opts.explain ? explainChain : undefined,
@@ -401,6 +418,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
       "TIMEOUT",
       "Time budget exceeded",
       "Increase --time-budget or reduce task scope.",
+      "nms night --dry-run --time-budget 10 --task-file task.json",
       retries,
       false,
       S.PLAN,

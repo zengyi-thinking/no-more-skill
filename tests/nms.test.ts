@@ -16,6 +16,8 @@ import {
   guardCommand,
   hostsCommand,
   ingestCommand,
+  ingestWatchCommand,
+  hookIngestFileCommand,
   nightCommand,
   profileReviewCommand,
   reportCommand,
@@ -513,6 +515,74 @@ describe.sequential("NMS v0.2 optimization", () => {
     })();
   });
 
+  test("birthday command computes real evolution deltas and inheritance lanes across periods", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const inputs = [
+          {
+            file: "old.json",
+            payload: {
+              compressed_text: "选题分析 大纲生成 草稿生成",
+              conversation: "先 选题分析 再 大纲生成 最后 草稿生成",
+              tool: "codex"
+            }
+          },
+          {
+            file: "mid.json",
+            payload: {
+              compressed_text: "PRD分析 代码生成 Debug",
+              conversation: "先 PRD分析 再 代码生成 最后 Debug",
+              tool: "codex"
+            }
+          },
+          {
+            file: "new.json",
+            payload: {
+              compressed_text: "PRD分析 UI生成 代码生成",
+              conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+              tool: "codex"
+            }
+          }
+        ];
+        for (const input of inputs) {
+          const full = path.join(process.cwd(), input.file);
+          fs.writeFileSync(full, JSON.stringify(input.payload), "utf8");
+          ingestCommand(full);
+        }
+
+        const dbPath = path.join(process.cwd(), ".nms", "data.json");
+        const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+        db.sessions[0].created_at = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+        db.sessions[1].created_at = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+        db.sessions[2].created_at = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), "utf8");
+
+        const out = JSON.parse(await birthdayCommand({ format: "json", periodDays: 30 }));
+        expect(out.capsule.schema_version).toBe(2);
+        expect(out.capsule.behavior_delta.domain_shift.changed).toBe(true);
+        expect(out.capsule.behavior_delta.skill_changes.length).toBeGreaterThan(0);
+        expect(out.capsule.personality_tags.length).toBeGreaterThan(0);
+        expect(out.capsule.evolution_summary.headline.length).toBeGreaterThan(0);
+        expect(out.capsule.evolution_lanes.inherit_keep.length).toBeGreaterThan(0);
+        expect(out.capsule.evolution_lanes.retire_stop.length).toBeGreaterThan(0);
+        expect(out.capsule.evolution_lanes.new_growth.length).toBeGreaterThan(0);
+
+        const context = JSON.parse(contextCommand({ format: "json" }));
+        expect(context.birthday_memory.behavior_delta.domain_shift.changed).toBe(true);
+        expect(context.birthday_memory.evolution_summary.headline).toBe(out.capsule.evolution_summary.headline);
+
+        const auto = JSON.parse(autoCommand("json"));
+        expect(auto.birthday_memory.personality_tags.length).toBeGreaterThan(0);
+        expect(auto.birthday_memory.evolution_lanes.new_growth.length).toBeGreaterThan(0);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
   test("v3 sessions can rebuild compatibility data when data.json is missing", () => {
     withTempCwd(() => {
       const payload = {
@@ -695,7 +765,160 @@ describe.sequential("NMS v0.2 optimization", () => {
       const content = fs.readFileSync(file, "utf8");
       expect(content).toContain("NMS 行为驾驶舱");
       expect(content).toContain("<html");
+      expect(content).toContain("真实数据来源");
     });
+  });
+
+  test("birthday and report html keep productized empty-state and source disclosure", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const birthday = JSON.parse(await birthdayCommand({ format: "json", periodDays: 30 }));
+        const birthdayHtml = fs.readFileSync(birthday.paths.html, "utf8");
+        expect(birthdayHtml).toContain("样本不足");
+        expect(birthdayHtml).toContain("真实数据来源");
+        expect(birthdayHtml).toContain("继承");
+        expect(birthdayHtml).toContain("放弃");
+        expect(birthdayHtml).toContain("新生");
+
+        const reportPath = await reportCommand({ format: "html", realOnly: true, period: "7d" });
+        const reportHtml = fs.readFileSync(reportPath, "utf8");
+        expect(reportHtml).toContain("样本不足");
+        expect(reportHtml).toContain("真实数据来源");
+        expect(reportHtml).toContain("Risk Panel");
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("hook ingest-file and ingest --watch consume real inbox files, dedupe, archive, and log failures", () => {
+    withTempCwd(() => {
+      const directFile = path.join(process.cwd(), "direct.json");
+      fs.writeFileSync(
+        directFile,
+        JSON.stringify({
+          compressed_text: "PRD分析 UI生成 代码生成",
+          conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+          tool: "codex"
+        }),
+        "utf8"
+      );
+      const direct = JSON.parse(hookIngestFileCommand(directFile));
+      expect(direct.status).toBe("ingested");
+
+      const inbox = path.join(process.cwd(), ".nms", "inbox");
+      fs.mkdirSync(inbox, { recursive: true });
+      fs.writeFileSync(
+        path.join(inbox, "duplicate.json"),
+        JSON.stringify({
+          compressed_text: "PRD分析 UI生成 代码生成",
+          conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+          tool: "codex"
+        }),
+        "utf8"
+      );
+      fs.writeFileSync(
+        path.join(inbox, "new.json"),
+        JSON.stringify({
+          compressed_text: "问题定义 资料收集 结论归纳",
+          conversation: "研究任务：问题定义 -> 资料收集 -> 结论归纳",
+          tool: "claude"
+        }),
+        "utf8"
+      );
+      fs.writeFileSync(path.join(inbox, "bad.json"), "{\"compressed_text\":", "utf8");
+
+      const watched = JSON.parse(ingestWatchCommand(inbox));
+      expect(watched.processed).toBe(3);
+      expect(watched.ingested).toBe(1);
+      expect(watched.duplicates).toBe(1);
+      expect(watched.failed).toBe(1);
+      expect(fs.readdirSync(path.join(inbox, "archive")).length).toBe(2);
+      expect(fs.readdirSync(path.join(inbox, "failed")).length).toBe(1);
+      expect(fs.readdirSync(path.join(process.cwd(), ".nms", "artifacts", "errors")).length).toBeGreaterThan(0);
+
+      const db = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".nms", "data.json"), "utf8"));
+      expect(db.sessions.length).toBe(2);
+    });
+  });
+
+  test("guard secret scan and night failure reports include safe recovery commands", () => {
+    withTempCwd(() => {
+      fs.mkdirSync("sandbox/new", { recursive: true });
+      fs.writeFileSync("sandbox/new/leak.ts", "const token = 'Bearer abc.def.ghi';\n", "utf8");
+      const guard = JSON.parse(guardCommand(["sandbox/new/leak.ts"], "json", "strict"));
+      expect(guard.ok).toBe(false);
+      expect(guard.reason).toContain("Secret scan blocked");
+      expect(guard.secret_hits.length).toBeGreaterThan(0);
+
+      fs.writeFileSync(
+        "task.json",
+        JSON.stringify({
+          task: "needs git",
+          files: ["sandbox/new/widget.tsx"],
+          constraints: ["ui/new/tests only"],
+          test_plan: ["node -e \"process.exit(0)\""]
+        }),
+        "utf8"
+      );
+      const applyNoGit = JSON.parse(nightCommand({ apply: true, taskFile: "task.json" }));
+      expect(applyNoGit.failure.next_safe_command).toBe("git init");
+    });
+  });
+
+  test("auto night birthday and report write audit trails", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const inputFile = path.join(process.cwd(), "input.json");
+        fs.writeFileSync(
+          inputFile,
+          JSON.stringify({
+            compressed_text: "PRD分析 UI生成 代码生成",
+            conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+            tool: "codex"
+          }),
+          "utf8"
+        );
+        ingestCommand(inputFile);
+
+        const birthday = JSON.parse(await birthdayCommand({ format: "json" }));
+        expect(birthday.audit_artifact).toContain("audit/");
+
+        const auto = JSON.parse(autoCommand("json"));
+        expect(auto.gate.audit_artifact).toContain("audit/");
+
+        const taskFile = path.join(process.cwd(), "task.json");
+        fs.writeFileSync(
+          taskFile,
+          JSON.stringify({
+            task: "audit trail dry-run",
+            files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+            constraints: ["ui/new/tests only"],
+            test_plan: ["node -e \"process.exit(0)\""]
+          }),
+          "utf8"
+        );
+        const night = JSON.parse(nightCommand({ dryRun: true, explain: true, taskFile }));
+        expect(night.audit_artifact).toContain("audit/");
+        expect(night.policy_profile).toBe("strict");
+
+        const reportPath = await reportCommand({ format: "html", realOnly: true, period: "7d" });
+        expect(fs.existsSync(reportPath)).toBe(true);
+        expect(fs.readdirSync(path.join(process.cwd(), ".nms", "audit")).length).toBeGreaterThan(0);
+
+        const doctor = doctorCommand();
+        expect(doctor).toContain("Policy Profiles");
+        expect(doctor).toContain("Audit Trail");
+      } finally {
+        process.chdir(old);
+      }
+    })();
   });
 
   test("slash router maps /nms-flow and /nms-doctor", async () => {

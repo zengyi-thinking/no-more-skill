@@ -14,6 +14,8 @@ import {
   hostsCommand,
   ingestGuideCommand,
   ingestCommand,
+  ingestWatchCommand,
+  hookIngestFileCommand,
   nightCommand,
   onboardingCommand,
   profileReviewCommand,
@@ -34,7 +36,12 @@ program
   .command("ingest", { hidden: true })
   .description("ingest compressed context payload from file or stdin")
   .option("-i, --input <file>", "input JSON file path")
+  .option("--watch <dir>", "consume real hook payloads from a directory such as .nms/inbox")
   .action((opts) => {
+    if (opts.watch) {
+      process.stdout.write(`${ingestWatchCommand(opts.watch)}\n`);
+      return;
+    }
     if (!opts.input && process.stdin.isTTY) {
       process.stdout.write(`${ingestGuideCommand()}\n`);
       return;
@@ -138,9 +145,11 @@ program
   .description("check write policy for files before an agent edits")
   .argument("[files...]", "files to check")
   .option("--format <type>", "human or json", "human")
+  .option("--policy-profile <name>", "strict, normal, or experimental", "normal")
   .action((files, opts) => {
     const format = opts.format === "json" ? "json" : "human";
-    process.stdout.write(`${files.length > 0 ? guardCommand(files, format) : guardPendingCommand(format)}\n`);
+    const profile = ["strict", "experimental"].includes(opts.policyProfile) ? opts.policyProfile : "normal";
+    process.stdout.write(`${files.length > 0 ? guardCommand(files, format, profile) : guardPendingCommand(format, profile)}\n`);
   });
 
 program
@@ -160,7 +169,9 @@ program
   .option("--task-file <file>", "planner JSON file path")
   .option("--resume <id>", "resume/read a previous night-run artifact")
   .option("--time-budget <min>", "time budget in minutes", "5")
+  .option("--policy-profile <name>", "strict, normal, or experimental", "strict")
   .action((opts) => {
+    const profile = ["normal", "experimental"].includes(opts.policyProfile) ? opts.policyProfile : "strict";
     const out = nightCommand({
       dryRun: Boolean(opts.dryRun),
       apply: Boolean(opts.apply),
@@ -168,9 +179,28 @@ program
       task: opts.task,
       taskFile: opts.taskFile,
       resume: opts.resume,
-      timeBudget: Number(opts.timeBudget)
+      timeBudget: Number(opts.timeBudget),
+      policyProfile: profile
     });
     process.stdout.write(`${out}\n`);
+  });
+
+const hookProgram = program
+  .command("hook", { hidden: true })
+  .description("host-facing hook ingestion helpers");
+
+hookProgram
+  .command("ingest-file")
+  .argument("<file>", "hook payload json file")
+  .action((file) => {
+    process.stdout.write(`${hookIngestFileCommand(String(file))}\n`);
+  });
+
+hookProgram
+  .command("consume-inbox")
+  .argument("[dir]", "directory to consume, defaults to .nms/inbox")
+  .action((dir) => {
+    process.stdout.write(`${ingestWatchCommand(dir)}\n`);
   });
 
 program

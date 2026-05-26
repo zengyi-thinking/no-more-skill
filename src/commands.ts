@@ -11,7 +11,7 @@ import { processCompressedEvent } from "./hook/engine.js";
 import { detectDomainFromText, detectSessionDomain, domainPackFor } from "./hook/domainPacks.js";
 import { JsonStorage, redactText } from "./storage.js";
 import { State } from "./types.js";
-import type { AgentContext, BirthdayCapsule, HookConsumeSummary, HookInput, NightReport, PlannerOutput, PolicyProfileName, SessionRecord, Stats } from "./types.js";
+import type { AgentContext, BirthdayCapsule, BirthdayWishContract, BirthdayWishMemory, HookConsumeSummary, HookInput, NightReport, PlannerOutput, PolicyProfileName, SessionRecord, Stats } from "./types.js";
 
 const InputSchema = z.object({
   compressed_text: z.string(),
@@ -339,7 +339,7 @@ export function onboardingCommand(format: "human" | "json" = "human"): string {
         },
         {
           title: "生成第一个可继承资产",
-          why: "birthday capsule 会被后续 /nms-auto 继承。",
+          why: "birthday capsule 和 birthday wish 会被后续 /nms-auto 继承。",
           command: "/nms-birthday"
         }
       ]
@@ -355,9 +355,9 @@ export function onboardingCommand(format: "human" | "json" = "human"): string {
           command: "/nms-auto"
         },
         {
-          title: "生成可展示报告或生日胶囊",
-          why: "报告用于展示，birthday memory 用于长期继承。",
-          command: "/nms-report 或 /nms-birthday"
+          title: "生成可展示报告或长期愿望",
+          why: "报告用于展示，birthday memory 和 birthday wish 用于长期继承。",
+          command: "/nms-report 或 /nms-birthday 或 /nms-birthday-wish"
         }
       ];
   const payload = {
@@ -377,7 +377,7 @@ export function onboardingCommand(format: "human" | "json" = "human"): string {
       command: host.invocation[0],
       fix_hint: host.fix_hint
     })),
-    user_commands: ["/nms-flow", "/nms-report", "/nms-auto", "/nms-birthday"],
+    user_commands: ["/nms-flow", "/nms-report", "/nms-auto", "/nms-birthday", "/nms-birthday-wish"],
     thirty_second_path: steps,
     principle: "Use real .nms data only. Empty data is a learning state, not an error."
   };
@@ -395,6 +395,7 @@ export function onboardingCommand(format: "human" | "json" = "human"): string {
     "- /nms-report    生成真实数据报告",
     "- /nms-auto      让 Agent 读取习惯并安全 dry-run",
     "- /nms-birthday  生成可继承的生日记忆胶囊",
+    "- /nms-birthday-wish  生成下一阶段愿望契约",
     "",
     "== 宿主调用状态 / Host Invocation ==",
     ...payload.host_integrations.map((host) => `- ${host.name}: ${host.status} · ${host.command}`),
@@ -1137,6 +1138,74 @@ function buildEvolutionLanes(input: {
   return { inherit_keep: inheritKeep, retire_stop: retireStop, new_growth: newGrowth };
 }
 
+function deriveWishType(wishText: string): "growth" | "focus" | "repair" | "explore" {
+  if (/(修|补|止损|恢复|fix|repair|reduce|减少|纠正)/i.test(wishText)) return "repair";
+  if (/(聚焦|收敛|稳定|focus|stabil|沉淀)/i.test(wishText)) return "focus";
+  if (/(探索|尝试|试试|experiment|explore)/i.test(wishText)) return "explore";
+  return "growth";
+}
+
+function buildDefaultWishText(context: AgentContext, birthday?: BirthdayWishMemory | AgentContext["birthday_memory"]): string {
+  if (birthday && "wish_text" in birthday) return birthday.wish_text;
+  if (context.data_quality.sample_count === 0) {
+    return "先积累至少 5 条真实行为样本，让 Agent 不再靠猜理解我。";
+  }
+  if (context.data_quality.warnings.some((warning) => warning.includes("陈旧") || warning.includes("stale"))) {
+    return "用下一阶段的真实任务把 .nms 刷新到足够新鲜，让 Agent 的理解不过时。";
+  }
+  if (context.data_quality.confidence < 0.6) {
+    const topWorkflow = context.relevant_workflows[0]?.name;
+    return topWorkflow
+      ? `把「${topWorkflow}」收敛成稳定的 Agent 工作流，减少任务切换。`
+      : "把当前最常用的工作方式收敛成稳定流程，让 Agent 更懂我。";
+  }
+  const topDomain = context.relevant_domains[0]?.name ?? "当前主领域";
+  const topWorkflow = context.relevant_workflows[0]?.name;
+  return topWorkflow
+    ? `把「${topWorkflow}」在 ${topDomain} 场景里继续固化成可复用的 Agent 协作方式。`
+    : `围绕 ${topDomain} 持续沉淀可复用的 Agent 工作方式。`;
+}
+
+function alignmentScore(wishText: string, context: AgentContext): { score: number; hits: string[] } {
+  const hits: string[] = [];
+  for (const domain of context.relevant_domains) {
+    if (wishText.includes(domain.name)) hits.push(`domain:${domain.name}`);
+  }
+  for (const workflow of context.relevant_workflows) {
+    if (wishText.includes(workflow.name)) hits.push(`workflow:${workflow.name}`);
+    for (const step of workflow.steps) {
+      if (wishText.includes(step)) hits.push(`step:${step}`);
+    }
+  }
+  if (context.birthday_memory) {
+    if (wishText.includes(context.birthday_memory.north_star)) hits.push("north_star");
+    for (const target of context.birthday_memory.next_year_targets) {
+      if (wishText.includes(target)) hits.push(`target:${target}`);
+    }
+  }
+  const score = Math.min(100, context.data_quality.sample_count * 8 + hits.length * 18 + Math.round(context.data_quality.confidence * 20));
+  return { score, hits: [...new Set(hits)] };
+}
+
+function groundednessLevel(score: number): "high" | "medium" | "low" {
+  if (score >= 70) return "high";
+  if (score >= 40) return "medium";
+  return "low";
+}
+
+function candidateWishOptions(context: AgentContext): string[] {
+  const candidates = [
+    buildDefaultWishText(context, context.birthday_memory),
+    context.relevant_workflows[0]
+      ? `把「${context.relevant_workflows[0].name}」练成 Agent 和我之间最稳定的默认配合。`
+      : undefined,
+    context.data_quality.warnings.some((warning) => warning.includes("陈旧") || warning.includes("stale"))
+      ? "先刷新最近真实任务样本，再让 Agent 做强判断。"
+      : undefined
+  ].filter((item): item is string => Boolean(item));
+  return [...new Set(candidates)].slice(0, 3);
+}
+
 function flowSuggestions(db: ReturnType<JsonStorage["load"]>): Array<{ title: string; why: string; next_command: string }> {
   const suggestions: Array<{ title: string; why: string; next_command: string }> = [];
   if (db.sessions.length === 0) {
@@ -1293,6 +1362,15 @@ export function contextCommand(options?: {
           `Tags: ${context.birthday_memory.personality_tags.join(", ") || "(none)"}`,
           `Evolution: ${context.birthday_memory.evolution_summary.headline}`,
           `Risks: ${context.birthday_memory.risks_to_watch.join(", ") || "(none)"}`
+        ]
+      : ["(none yet)"]),
+    "Birthday Wish:",
+    ...(context.birthday_wish
+      ? [
+          `Wish: ${context.birthday_wish.wish_text}`,
+          `Status: ${context.birthday_wish.status}`,
+          `Groundedness: ${context.birthday_wish.groundedness.score} (${context.birthday_wish.groundedness.level})`,
+          `Progress: ${context.birthday_wish.progress.summary}`
         ]
       : ["(none yet)"]),
     "Warnings:",
@@ -1635,6 +1713,7 @@ export function autoCommand(format: "human" | "json" = "human"): string {
   const brief = JSON.parse(briefCommand({ task, profile: "strict", format: "json" })) as BriefPayload;
   const suggestion = JSON.parse(suggestCommand({ task, format: "json" })) as SuggestPayload;
   const guard = JSON.parse(guardPendingCommand("json", policyProfile)) as GuardPayload;
+  const birthdayWish = context.birthday_wish;
   const night = guard.ok
     ? JSON.parse(nightCommand({ dryRun: true, explain: true, task, policyProfile })) as NightReport
     : null;
@@ -1645,6 +1724,7 @@ export function autoCommand(format: "human" | "json" = "human"): string {
   const workflow = suggestion.suggested_workflow.length > 0
     ? suggestion.suggested_workflow
     : context.relevant_workflows[0]?.steps ?? [];
+  const wishBias = birthdayWish?.execution_contract.next_agent_bias?.[0];
   const workflowText = workflow.length > 0 ? workflow.join(" -> ") : "(no stable workflow yet)";
   const birthdayMemory = context.birthday_memory;
   const nextStep = decision === "READY_FOR_REVIEW"
@@ -1669,6 +1749,7 @@ export function autoCommand(format: "human" | "json" = "human"): string {
       stage: "SELECT_WORKFLOW",
       status: "done",
       summary: `${suggestion.source}; ${workflowText}.`
+        + (wishBias ? ` wish-bias=${wishBias}.` : "")
     },
     {
       stage: "CHECK_WRITE_BOUNDARY",
@@ -1702,12 +1783,13 @@ export function autoCommand(format: "human" | "json" = "human"): string {
       avoid: brief.user_style.avoid
     },
     birthday_memory: birthdayMemory ?? null,
+    birthday_wish: birthdayWish ?? null,
     selected_workflow: {
       domain: suggestion.detected_domain,
       confidence: suggestion.domain_confidence,
       source: suggestion.source,
       steps: workflow,
-      why: suggestion.why
+      why: wishBias ? `${suggestion.why} Wish bias: ${wishBias}` : suggestion.why
     },
     write_guard: {
       ok: guard.ok,
@@ -1752,8 +1834,12 @@ export function autoCommand(format: "human" | "json" = "human"): string {
     inputSummary: task,
     fileScope: guard.files,
     gateResult: decision,
-    artifactPaths: [relativeToNmsRoot(storage, autoArtifactPath), ...(birthdayMemory ? [birthdayMemory.latest_capsule_ref] : [])],
-    notes: [gateReason]
+    artifactPaths: [
+      relativeToNmsRoot(storage, autoArtifactPath),
+      ...(birthdayMemory ? [birthdayMemory.latest_capsule_ref] : []),
+      ...(birthdayWish ? [birthdayWish.latest_wish_ref] : [])
+    ],
+    notes: [gateReason, ...(wishBias ? [`wish_bias=${wishBias}`] : [])]
   });
   payload.gate.audit_artifact = autoAuditRef;
   writeJsonArtifact(autoArtifactPath, payload);
@@ -1770,6 +1856,8 @@ export function autoCommand(format: "human" | "json" = "human"): string {
     ...(birthdayMemory ? [`Birthday North Star: ${birthdayMemory.north_star}`] : []),
     ...(birthdayMemory ? [`Birthday Evolution: ${birthdayMemory.evolution_summary.headline}`] : []),
     ...(birthdayMemory ? [`Birthday Tags: ${birthdayMemory.personality_tags.join(", ") || "(none)"}`] : []),
+    ...(birthdayWish ? [`Birthday Wish: ${birthdayWish.wish_text}`] : []),
+    ...(birthdayWish ? [`Wish Progress: ${birthdayWish.progress.summary}`] : []),
     `Selected Workflow: ${workflowText}`,
     "== Agent Workflow ==",
     ...agentWorkflow.map((step, index) => `${index + 1}. ${step.stage}: ${step.status}\n   ${step.summary}`),
@@ -2619,6 +2707,346 @@ ${imageNotes.map((n) => `- ${n}`).join("\n")}
     notes: [`sample_count=${reportSessions.length}`]
   });
   return reportPath;
+}
+
+export async function birthdayWishCommand(options?: {
+  wishText?: string;
+  source?: "user" | "agent";
+  outputDir?: string;
+  format?: "human" | "json";
+  horizon?: "30d" | "90d" | "1y";
+}): Promise<string> {
+  const storage = new JsonStorage();
+  const context = storage.buildAgentContext(defaultTaskSummary(storage));
+  const generatedAt = new Date().toISOString();
+  const stamp = generatedAt.replace(/[:.]/g, "-");
+  const existingWish = context.birthday_wish;
+  const explicitWish = options?.wishText?.trim();
+  const source = explicitWish ? (options?.source ?? "user") : existingWish?.source ?? "agent";
+  const status = explicitWish
+    ? (source === "user" ? "active" : "proposed")
+    : existingWish?.status ?? "proposed";
+  const wishText = explicitWish
+    || existingWish?.wish_text
+    || buildDefaultWishText(context, existingWish ?? context.birthday_memory);
+  const horizon = options?.horizon ?? existingWish?.horizon ?? "90d";
+  const wishType = explicitWish ? deriveWishType(wishText) : existingWish?.wish_type ?? deriveWishType(wishText);
+  const candidateWishes = candidateWishOptions(context);
+  const alignment = alignmentScore(wishText, context);
+  const alignmentLevel = groundednessLevel(alignment.score);
+  const relatedSkills = context.relevant_workflows
+    .flatMap((workflow) => workflow.steps)
+    .filter((step) => wishText.includes(step))
+    .slice(0, 4);
+  const fallbackSkills = context.user_style.workflow.slice(0, 2);
+  const relatedWorkflows = context.relevant_workflows
+    .filter((workflow) => wishText.includes(workflow.name) || workflow.steps.some((step) => wishText.includes(step)))
+    .map((workflow) => workflow.name)
+    .slice(0, 3);
+  const relatedDomains = context.relevant_domains
+    .filter((domain) => wishText.includes(domain.name))
+    .map((domain) => domain.name)
+    .slice(0, 3);
+  const conflicts = [
+    ...(context.data_quality.warnings.some((warning) => warning.includes("陈旧") || warning.includes("stale"))
+      ? ["当前样本偏旧，如果不先刷新真实任务，wish 会变成空话。"] : []),
+    ...(alignment.score < 40
+      ? ["这个愿望和你现有行为证据的匹配度偏低，先从更近的任务切口开始。"] : []),
+    ...(context.data_quality.confidence < 0.6
+      ? ["主 workflow 还不够稳，愿望最好先压缩成更具体的 30 天方向。"] : [])
+  ];
+  const groundedWhy = [
+    explicitWish
+      ? "这是一次明确表达的愿望，不是系统替你乱猜。"
+      : existingWish
+        ? "当前没有新愿望输入，系统在用已有 wish 和真实数据刷新进度。"
+        : "当前没有明确愿望输入，系统只基于真实 .nms 行为给出一个保守候选。",
+    alignment.hits.length > 0
+      ? `它和现有行为证据存在交集：${alignment.hits.join(", ")}。`
+      : "它和现有行为证据交集不多，因此只适合当 proposed wish。",
+    `当前样本量=${context.data_quality.sample_count}，workflow confidence=${context.data_quality.confidence}。`
+  ];
+  const keep = existingWish?.execution_contract.keep
+    ?? context.birthday_memory?.retained_commitments.slice(0, 3)
+    ?? ["保留真实 .nms 数据优先，不要靠想象定义自己。"];
+  const stop = existingWish?.execution_contract.stop
+    ?? [
+      ...(context.birthday_memory?.risks_to_watch.slice(0, 2) ?? []),
+      ...(context.data_quality.warnings.length > 0 ? [context.data_quality.warnings[0]] : [])
+    ].filter(Boolean).slice(0, 3);
+  const start = existingWish?.execution_contract.start
+    ?? [
+      wishType === "focus"
+        ? "把愿望拆成 30 天内可被行为验证的工作动作。"
+        : "让接下来的真实任务尽量对齐这个愿望，而不是停留在口号层。",
+      context.relevant_workflows[0]
+        ? `优先复用 ${context.relevant_workflows[0].name}，观察它是否支持这个愿望。`
+        : "先积累稳定 workflow，再谈长期升级。"
+    ].slice(0, 3);
+  const successSignals = [
+    "相关 workflow 被重复复用，而不是只出现一次。",
+    "相关 skill 频率上升，且样本足够新鲜。",
+    "birthday / auto / flow 三处都能看到一致的方向信号。"
+  ];
+  const riskSignals = [
+    "愿望和真实任务长期脱节，只停留在文案里。",
+    "stale risk 持续偏高，说明 Agent 在追旧的你。",
+    "执行方向频繁切换，导致 workflow 一直收不拢。"
+  ];
+  const nextAgentBias = [
+    relatedWorkflows[0]
+      ? `Prefer workflow: ${relatedWorkflows[0]}`
+      : context.relevant_workflows[0]
+        ? `Prefer workflow: ${context.relevant_workflows[0].name}`
+        : "Prefer the smallest verifiable workflow first.",
+    relatedDomains[0]
+      ? `Bias toward domain: ${relatedDomains[0]}`
+      : context.relevant_domains[0]
+        ? `Bias toward domain: ${context.relevant_domains[0].name}`
+        : "Bias toward collecting more real samples.",
+    "Before strong decisions, verify that recent tasks still support this wish."
+  ];
+  const progressTrend: "up" | "flat" | "down" =
+    context.data_quality.confidence >= 0.6 && context.data_quality.warnings.length === 0
+      ? "up"
+      : context.data_quality.warnings.some((warning) => warning.includes("陈旧") || warning.includes("stale"))
+        ? "down"
+        : "flat";
+  const progressSummary = progressTrend === "up"
+    ? "当前行为数据正在逐步支持这个愿望。"
+    : progressTrend === "down"
+      ? "当前愿望存在数据新鲜度或收敛度风险，先补最近真实任务。"
+      : "方向是合理的，但还需要更多连续样本来证明它正在发生。";
+  const latestSignals = [
+    `sample_count=${context.data_quality.sample_count}`,
+    `workflow_confidence=${context.data_quality.confidence}`,
+    ...(context.relevant_workflows[0] ? [`top_workflow=${context.relevant_workflows[0].name}`] : []),
+    ...(context.relevant_domains[0] ? [`top_domain=${context.relevant_domains[0].name}`] : [])
+  ];
+
+  const reportDir = options?.outputDir
+    ? path.resolve(options.outputDir)
+    : path.join(storage.root, "artifacts", "birthday-wish", "latest");
+  const derivedDir = path.join(storage.root, "derived", "birthday-wish");
+  const historyDir = path.join(derivedDir, "history");
+  fs.mkdirSync(reportDir, { recursive: true });
+  fs.mkdirSync(historyDir, { recursive: true });
+
+  const jsonPath = path.join(derivedDir, "latest.json");
+  const historyPath = path.join(historyDir, `${stamp}.json`);
+  const htmlPath = path.join(reportDir, "wish.html");
+  const mdPath = path.join(reportDir, "wish.md");
+  const wishId = existingWish?.latest_wish_ref?.split("/").at(-1)?.replace(".json", "") ?? `wish_${Date.now()}`;
+  const sourceHash = sha256(JSON.stringify({
+    generatedAt,
+    wishText,
+    source,
+    status,
+    groundedness: alignment.score,
+    sampleCount: context.data_quality.sample_count
+  }));
+  const contract: BirthdayWishContract = {
+    schema_version: 1,
+    generated_at: generatedAt,
+    wish_id: wishId,
+    source,
+    status,
+    wish_text: wishText,
+    wish_type: wishType,
+    horizon,
+    north_star_alignment: alignment.score >= 70 ? "high" : alignment.score >= 40 ? "medium" : "low",
+    groundedness: {
+      score: alignment.score,
+      level: alignmentLevel,
+      why: groundedWhy,
+      evidence_refs: context.relevant_workflows.flatMap((workflow) => workflow.evidence_refs).slice(0, 5)
+    },
+    behavior_fit: {
+      related_skills: relatedSkills.length > 0 ? relatedSkills : fallbackSkills,
+      related_workflows: relatedWorkflows.length > 0 ? relatedWorkflows : context.relevant_workflows.slice(0, 2).map((workflow) => workflow.name),
+      related_domains: relatedDomains.length > 0 ? relatedDomains : context.relevant_domains.slice(0, 2).map((domain) => domain.name),
+      conflicts
+    },
+    execution_contract: {
+      keep,
+      stop,
+      start,
+      success_signals: successSignals,
+      risk_signals: riskSignals,
+      next_agent_bias: nextAgentBias
+    },
+    progress: {
+      trend: progressTrend,
+      summary: progressSummary,
+      latest_signals: latestSignals
+    },
+    artifacts: {
+      json_ref: relativeToNmsRoot(storage, jsonPath),
+      html_ref: relativeToNmsRoot(storage, htmlPath),
+      markdown_ref: relativeToNmsRoot(storage, mdPath)
+    }
+  };
+
+  writeJsonArtifact(jsonPath, contract);
+  writeJsonArtifact(historyPath, contract);
+  const markdown = `# NMS Birthday Wish Contract
+
+生成时间：${generatedAt}
+
+## Wish
+
+${wishText}
+
+## Groundedness
+
+- Score: ${contract.groundedness.score}
+- Level: ${contract.groundedness.level}
+${contract.groundedness.why.map((item) => `- ${item}`).join("\n")}
+
+## Keep / Stop / Start
+
+### Keep
+${contract.execution_contract.keep.map((item) => `- ${item}`).join("\n")}
+
+### Stop
+${contract.execution_contract.stop.map((item) => `- ${item}`).join("\n")}
+
+### Start
+${contract.execution_contract.start.map((item) => `- ${item}`).join("\n")}
+
+## Agent Bias
+
+${contract.execution_contract.next_agent_bias.map((item) => `- ${item}`).join("\n")}
+
+## Progress
+
+- Trend: ${contract.progress.trend}
+- Summary: ${contract.progress.summary}
+${contract.progress.latest_signals.map((item) => `- ${item}`).join("\n")}
+`;
+  fs.writeFileSync(mdPath, markdown, "utf8");
+
+  const html = visualShell({
+    theme: "birthday",
+    title: "NMS Birthday Wish Contract",
+    eyebrow: "NMS Birthday Wish · Future Contract",
+    headline: "你不只是回顾过去，还在给未来下达命令。",
+    subtitle: "这是一份基于真实 .nms 行为数据生成的长期愿望契约。它不是空想清单，而是让 Agent 知道你接下来想往哪里长、应该怎么帮你长。",
+    metrics: [
+      { label: "Wish Status", value: contract.status, note: contract.source },
+      { label: "Groundedness", value: String(contract.groundedness.score), note: contract.groundedness.level },
+      { label: "North Star Fit", value: contract.north_star_alignment, note: contract.horizon },
+      { label: "Progress", value: contract.progress.trend, note: contract.progress.summary }
+    ],
+    body: `
+      <section class="card">
+        <h2>Wish</h2>
+        <div class="item">${escapeHtml(contract.wish_text)}</div>
+        <div style="margin-top:14px">${renderPills(candidateWishes, "暂无候选愿望。", "neutral")}</div>
+        <div class="source">如果这是系统自动生成的候选，它会保持 <code>proposed</code>，不会替你直接拍板人生方向。</div>
+      </section>
+      <section class="grid-2">
+        <div class="card">
+          <h2>Groundedness</h2>
+          <div class="item">Score ${contract.groundedness.score} · ${contract.groundedness.level}</div>
+          ${renderTimeline(
+            contract.groundedness.why.map((item, index) => ({
+              title: `Why ${index + 1}`,
+              body: item
+            })),
+            "暂无 groundedness 解释。"
+          )}
+        </div>
+        <div class="card">
+          <h2>Behavior Fit</h2>
+          <div class="list">
+            <div class="item">Related Skills：${contract.behavior_fit.related_skills.join(", ") || "暂无"}</div>
+            <div class="item">Related Workflows：${contract.behavior_fit.related_workflows.join(", ") || "暂无"}</div>
+            <div class="item">Related Domains：${contract.behavior_fit.related_domains.join(", ") || "暂无"}</div>
+          </div>
+          <div style="margin-top:14px">${renderPills(contract.behavior_fit.conflicts, "暂无明显冲突。", "negative")}</div>
+        </div>
+      </section>
+      <section class="grid-3">
+        <div class="lane keep">
+          <h2>Keep</h2>
+          <div class="list">${contract.execution_contract.keep.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+        </div>
+        <div class="lane stop">
+          <h2>Stop</h2>
+          <div class="list">${contract.execution_contract.stop.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+        </div>
+        <div class="lane new">
+          <h2>Start</h2>
+          <div class="list">${contract.execution_contract.start.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+        </div>
+      </section>
+      <section class="grid-2">
+        <div class="card">
+          <h2>Agent Contract</h2>
+          ${renderTimeline(
+            contract.execution_contract.next_agent_bias.map((item, index) => ({
+              title: `Bias ${index + 1}`,
+              body: item
+            })),
+            "暂无 agent bias。"
+          )}
+        </div>
+        <div class="card">
+          <h2>Progress</h2>
+          <div class="item">${escapeHtml(contract.progress.summary)}</div>
+          <div style="margin-top:14px">${renderPills(contract.progress.latest_signals, "暂无最新信号。", "neutral")}</div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="source">真实数据来源：<code>.nms/data.json</code>、<code>.nms/sessions</code>、<code>.nms/derived/birthday/latest.json</code>、<code>.nms/derived/birthday-wish/latest.json</code>。这份 wish contract 会被 <code>/nms-auto</code> 作为长期偏置读取，但不会覆盖安全边界。</div>
+      </section>`
+  });
+  fs.writeFileSync(htmlPath, html, "utf8");
+
+  storage.recordArtifact({
+    type: "context",
+    path: contract.artifacts.json_ref,
+    source_data_hash: sourceHash,
+    real_data_only: true,
+    metadata: { kind: "birthday-wish", status: contract.status, source: contract.source }
+  });
+  storage.recordArtifact({
+    type: "report",
+    path: contract.artifacts.html_ref,
+    source_data_hash: sourceHash,
+    real_data_only: true,
+    metadata: { kind: "birthday-wish", format: "html", status: contract.status }
+  });
+  storage.recordEvent("REPORT_GENERATED", contract.artifacts.html_ref, sourceHash);
+  const auditRef = recordCommandAudit(storage, {
+    command: "birthday-wish",
+    triggeredBy: "/nms-birthday-wish",
+    policyProfile: "normal",
+    inputSummary: explicitWish ? wishText : `refresh wish ${contract.status}`,
+    fileScope: [],
+    gateResult: contract.status.toUpperCase(),
+    artifactPaths: [contract.artifacts.json_ref, contract.artifacts.html_ref, contract.artifacts.markdown_ref],
+    notes: [contract.progress.summary]
+  });
+  const payload = {
+    generated_at: generatedAt,
+    contract,
+    audit_artifact: auditRef,
+    candidate_wishes: candidateWishes,
+    next_step: "Run /nms-auto; it will now inherit birthday_wish through nms context."
+  };
+  if (options?.format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    "== NMS Birthday Wish ==",
+    `Wish: ${contract.wish_text}`,
+    `Status: ${contract.status}`,
+    `Groundedness: ${contract.groundedness.score} (${contract.groundedness.level})`,
+    `North Star Fit: ${contract.north_star_alignment}`,
+    `Progress: ${contract.progress.summary}`,
+    `HTML: ${htmlPath}`,
+    payload.next_step
+  ].join("\n");
 }
 
 export async function birthdayCommand(options?: {

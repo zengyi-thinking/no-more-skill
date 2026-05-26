@@ -3,6 +3,7 @@ import { Command } from "commander";
 import {
   autoCommand,
   birthdayCommand,
+  birthdayWishCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -138,6 +139,28 @@ program
       baseUrl: opts.baseUrl,
       apiKey: opts.apiKey,
       model: opts.model
+    });
+    process.stdout.write(`${out}\n`);
+  });
+
+program
+  .command("birthday-wish")
+  .description("generate or refresh a birthday wish contract grounded in .nms behavior")
+  .option("--wish <text>", "wish text from user or agent")
+  .option("--source <type>", "user or agent", "user")
+  .option("--horizon <range>", "30d, 90d, or 1y", "90d")
+  .option("--format <type>", "human or json", "human")
+  .option("--output-dir <dir>", "birthday wish output directory")
+  .action(async (opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    const source = opts.source === "agent" ? "agent" : "user";
+    const horizon = ["30d", "1y"].includes(opts.horizon) ? opts.horizon : "90d";
+    const out = await birthdayWishCommand({
+      wishText: opts.wish,
+      source,
+      horizon,
+      format,
+      outputDir: opts.outputDir
     });
     process.stdout.write(`${out}\n`);
   });

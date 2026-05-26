@@ -44,6 +44,7 @@ Most users only need four commands:
 - `/nms-report`: generate a visual HTML report from real `.nms` behavior data.
 - `/nms-auto`: simulate the user's workflow from `.nms` and run the guarded dry-run gate.
 - `/nms-birthday`: generate a living birthday memory capsule that future Agents can inherit.
+- `/nms-birthday-wish`: generate a grounded future wish contract that future Agents can inherit.
 
 `/nms-birthday` is not just a yearly summary. It writes `.nms/derived/birthday/latest.json`, and future `/nms-auto` runs inherit its North Star and next-year targets through Agent Context.
 
@@ -103,6 +104,7 @@ If your host uses `/<skill>-<function>` style, normal users should call:
 - `/nms-report`
 - `/nms-auto`
 - `/nms-birthday`
+- `/nms-birthday-wish`
 - `/nms` for the 30-second onboarding entry
 
 These commands call internal capabilities automatically. For example, `/nms-auto` transparently uses brief, suggest, guard, and the night gate.
@@ -113,6 +115,7 @@ GSD/Gemini style aliases:
 - `/nms:report`
 - `/nms:auto`
 - `/nms:birthday`
+- `/nms:birthday-wish`
 
 Codex style aliases:
 
@@ -120,6 +123,7 @@ Codex style aliases:
 - `$nms-report`
 - `$nms-auto`
 - `$nms-birthday`
+- `$nms-birthday-wish`
 
 > Note: when testing `$nms-*` in local PowerShell, quote the command token: `npm run dev:skill -- '$nms-flow'`. In host command palettes, quoting is not required.
 
@@ -179,6 +183,7 @@ npm run dev -- birthday
 - `nms report` generates a product-style HTML cockpit report from real `.nms` data by default.
 - `nms auto` reads `.nms`, infers the workflow, checks write boundaries, and enters the dry-run Gate without applying changes.
 - `nms birthday` writes `.nms/derived/birthday/latest.json` plus a birthday HTML page; future `nms context` and `/nms-auto` inherit `birthday_memory`.
+- `nms birthday-wish` writes `.nms/derived/birthday-wish/latest.json` plus a wish HTML page; future `nms context` and `/nms-auto` inherit `birthday_wish`.
 - Internal Agent capabilities still exist, but `/nms-auto` owns the user-facing workflow so users do not need to memorize them.
 
 ## Safety Boundaries

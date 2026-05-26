@@ -7,6 +7,7 @@ import { DEFAULT_CONFIG } from "../src/config.js";
 import {
   autoCommand,
   birthdayCommand,
+  birthdayWishCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -516,6 +517,64 @@ describe.sequential("NMS v0.2 optimization", () => {
     })();
   });
 
+  test("birthday wish command creates grounded contract and is inherited by context and auto", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const inputFile = path.join(process.cwd(), "input.json");
+        fs.writeFileSync(
+          inputFile,
+          JSON.stringify({
+            compressed_text: "PRD分析 UI生成 代码生成",
+            conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+            tool: "codex"
+          }),
+          "utf8"
+        );
+        ingestCommand(inputFile);
+        await birthdayCommand({ format: "json" });
+
+        const wish = JSON.parse(await birthdayWishCommand({
+          format: "json",
+          wishText: "我希望下一阶段把 PRD分析 和 代码生成 固化成更稳定的 Agent 协作方式"
+        }));
+        expect(wish.contract.wish_text).toContain("PRD分析");
+        expect(wish.contract.status).toBe("active");
+        expect(wish.contract.groundedness.score).toBeGreaterThan(0);
+        expect(wish.contract.execution_contract.next_agent_bias.length).toBeGreaterThan(0);
+        expect(fs.existsSync(path.join(process.cwd(), ".nms", "derived", "birthday-wish", "latest.json"))).toBe(true);
+
+        const context = JSON.parse(contextCommand({ format: "json" }));
+        expect(context.birthday_wish.wish_text).toBe(wish.contract.wish_text);
+
+        const auto = JSON.parse(autoCommand("json"));
+        expect(auto.birthday_wish.wish_text).toBe(wish.contract.wish_text);
+        expect(auto.selected_workflow.why).toContain("Wish bias");
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("birthday wish command falls back to proposed candidate when no explicit wish is provided", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const wish = JSON.parse(await birthdayWishCommand({ format: "json" }));
+        expect(wish.contract.status).toBe("proposed");
+        expect(wish.contract.groundedness.level).toBe("low");
+        expect(wish.candidate_wishes.length).toBeGreaterThan(0);
+        expect(fs.existsSync(path.join(process.cwd(), ".nms", "artifacts", "birthday-wish", "latest", "wish.html"))).toBe(true);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
   test("birthday command computes real evolution deltas and inheritance lanes across periods", async () => {
     await (async () => {
       const old = process.cwd();
@@ -990,6 +1049,7 @@ describe.sequential("NMS v0.2 optimization", () => {
       expect(helpUnified).toContain("- /nms-report");
       expect(helpUnified).toContain("- /nms-auto");
       expect(helpUnified).toContain("- /nms-birthday");
+      expect(helpUnified).toContain("- /nms-birthday-wish");
       expect(helpUnified).toContain("next: 让 Agent 调用 NMS ingest");
       expect(helpUnified).toContain("Internal Agent steps stay hidden behind /nms-auto");
       expect(helpUnified).not.toContain("/nms-night");
@@ -1007,6 +1067,7 @@ describe.sequential("NMS v0.2 optimization", () => {
     expect(help).toContain("report");
     expect(help).toContain("auto");
     expect(help).toContain("birthday");
+    expect(help).toContain("birthday-wish");
     expect(help).not.toMatch(/\n\s+night\b/);
     expect(help).not.toMatch(/\n\s+brief\b/);
     expect(help).not.toMatch(/\n\s+guard\b/);
@@ -1051,6 +1112,7 @@ describe.sequential("NMS v0.2 optimization", () => {
           ["/nms-flow", "Behavior Cockpit"],
           ["/nms-auto", "NMS Auto"],
           ["/nms-birthday", "NMS Birthday"],
+          ["/nms-birthday-wish", "NMS Birthday Wish"],
           ["/nms-data", "NMS Data Status"],
           ["/nms-profile", "NMS Profile Review"],
           ["/nms-context", "NMS Agent Context"],
@@ -1122,6 +1184,24 @@ describe.sequential("NMS v0.2 optimization", () => {
         expect(content).toContain("<html");
         expect(content).toContain("No More Skill");
         expect(content).toContain("Weekly Behavior Cockpit");
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("slash router maps /nms-birthday-wish", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const out = await runSkillRoute({
+          slashCommand: "/nms-birthday-wish",
+          args: { format: "human", wish: "我希望下一阶段让 Agent 更稳定地协作" }
+        });
+        expect(out).toContain("NMS Birthday Wish");
+        expect(out).toContain("Groundedness");
       } finally {
         process.chdir(old);
       }

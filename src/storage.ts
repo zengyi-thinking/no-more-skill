@@ -6,6 +6,7 @@ import type {
   ArtifactRecord,
   AuditRecord,
   BirthdayCapsule,
+  BirthdayWishContract,
   Database,
   NmsEvent,
   SessionRecord,
@@ -426,6 +427,41 @@ export class JsonStorage {
     }
   }
 
+  private readLatestBirthdayWish(): AgentContext["birthday_wish"] | undefined {
+    const wishPath = path.join(this.root, "derived", "birthday-wish", "latest.json");
+    if (!fs.existsSync(wishPath)) return undefined;
+    try {
+      const wish = JSON.parse(fs.readFileSync(wishPath, "utf8")) as BirthdayWishContract;
+      return {
+        latest_wish_ref: relativeToRoot(this.root, wishPath),
+        generated_at: wish.generated_at,
+        source: wish.source,
+        status: wish.status,
+        wish_text: wish.wish_text,
+        wish_type: wish.wish_type,
+        horizon: wish.horizon,
+        north_star_alignment: wish.north_star_alignment,
+        groundedness: {
+          score: wish.groundedness.score,
+          level: wish.groundedness.level,
+          why: wish.groundedness.why
+        },
+        execution_contract: {
+          keep: wish.execution_contract.keep,
+          stop: wish.execution_contract.stop,
+          start: wish.execution_contract.start,
+          next_agent_bias: wish.execution_contract.next_agent_bias
+        },
+        progress: {
+          trend: wish.progress.trend,
+          summary: wish.progress.summary
+        }
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   buildAgentContext(taskSummary = ""): AgentContext {
     const db = this.load();
     const topWorkflowEntries = Object.entries(db.stats.workflow_counts).sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -480,6 +516,8 @@ export class JsonStorage {
     };
     const birthdayMemory = this.readLatestBirthdayMemory();
     if (birthdayMemory) context.birthday_memory = birthdayMemory;
+    const birthdayWish = this.readLatestBirthdayWish();
+    if (birthdayWish) context.birthday_wish = birthdayWish;
     return context;
   }
 
@@ -491,6 +529,7 @@ export class JsonStorage {
       path.join("artifacts", "reports"),
       path.join("artifacts", "images"),
       path.join("artifacts", "prompts"),
+      path.join("artifacts", "birthday-wish"),
       path.join("artifacts", "night-runs"),
       path.join("artifacts", "auto"),
       path.join("artifacts", "errors"),
@@ -500,6 +539,7 @@ export class JsonStorage {
       path.join("inbox", "failed"),
       "policies",
       "domains",
+      path.join("derived", "birthday-wish"),
       "backups"
     ]) {
       fs.mkdirSync(path.join(this.root, dir), { recursive: true });

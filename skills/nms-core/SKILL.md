@@ -13,18 +13,19 @@ NMS core skill for behavior learning, workflow replay, explainable night runs, a
 - `/nms-report`
 - `/nms-auto`
 - `/nms-birthday`
+- `/nms-birthday-wish`
 
 These are the only commands that should be promoted to users. They are zero-argument first.
 Use `/nms` as the onboarding entry; it explains the 30-second path and the current data state.
 
 ## Hidden Agent workflow
 
-Do not promote low-level routes to users. `/nms-auto` is the public workflow entry and internally reads behavior context, builds a brief, selects a workflow, checks write scope, and runs the dry-run Gate. `/nms-birthday` creates the living birthday memory capsule used by future Agent context.
+Do not promote low-level routes to users. `/nms-auto` is the public workflow entry and internally reads behavior context, builds a brief, selects a workflow, checks write scope, and runs the dry-run Gate. `/nms-birthday` creates the living birthday memory capsule used by future Agent context. `/nms-birthday-wish` creates the grounded future wish contract used by future Agent context.
 
 ## Runtime aliases
 
-- GSD style: `/nms:flow`, `/nms:report`, `/nms:auto`, `/nms:birthday`
-- Codex style: `$nms-flow`, `$nms-report`, `$nms-auto`, `$nms-birthday`
+- GSD style: `/nms:flow`, `/nms:report`, `/nms:auto`, `/nms:birthday`, `/nms:birthday-wish`
+- Codex style: `$nms-flow`, `$nms-report`, `$nms-auto`, `$nms-birthday`, `$nms-birthday-wish`
 - Agent route mode: `nms route --cmd /nms-flow`
 - Host repair: if `/nms` is not visible in Claude Code/OpenCode, run `nms hosts --write-commands` and restart the host.
 
@@ -33,6 +34,7 @@ Do not promote low-level routes to users. `/nms-auto` is the public workflow ent
 - `--apply` is explicit and guarded.
 - `/nms-auto` wraps `.nms` data, user brief, workflow suggestion, write guard, and dry-run gate without exposing low-level commands to users.
 - `/nms-birthday` writes `.nms/derived/birthday/latest.json` and a shareable birthday HTML report.
+- `/nms-birthday-wish` writes `.nms/derived/birthday-wish/latest.json` and a grounded wish HTML report.
 - The internal execution engine still requires an explicit reviewed task file for production apply.
 - The write guard checks pending Git files by default; pass explicit files only for automation.
 - Reports must use real `.nms` data; if samples are missing, say so instead of inventing.

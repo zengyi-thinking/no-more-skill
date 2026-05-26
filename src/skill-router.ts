@@ -1,6 +1,7 @@
 import {
   autoCommand,
   birthdayCommand,
+  birthdayWishCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -88,6 +89,14 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         baseUrl: args["base-url"] as string | undefined,
         apiKey: args["api-key"] as string | undefined,
         model: args.model as string | undefined
+      });
+    case "/nms-birthday-wish":
+      return birthdayWishCommand({
+        wishText: (args.wish as string | undefined) ?? (args.text as string | undefined),
+        source: (args.source as "user" | "agent") ?? "user",
+        horizon: (args.horizon as "30d" | "90d" | "1y") ?? "90d",
+        format: (args.format as "human" | "json") ?? "human",
+        outputDir: args["output-dir"] as string | undefined
       });
     case "/nms-flow":
       if (toBool(args.visual)) {

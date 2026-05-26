@@ -183,6 +183,78 @@ export interface BirthdayMemory {
   risks_to_watch: string[];
 }
 
+export type BirthdayWishSource = "user" | "agent";
+export type BirthdayWishStatus = "proposed" | "active" | "paused" | "completed" | "dropped";
+export type BirthdayWishType = "growth" | "focus" | "repair" | "explore";
+
+export interface BirthdayWishContract {
+  schema_version: 1;
+  generated_at: string;
+  wish_id: string;
+  source: BirthdayWishSource;
+  status: BirthdayWishStatus;
+  wish_text: string;
+  wish_type: BirthdayWishType;
+  horizon: "30d" | "90d" | "1y";
+  north_star_alignment: "high" | "medium" | "low";
+  groundedness: {
+    score: number;
+    level: "high" | "medium" | "low";
+    why: string[];
+    evidence_refs: string[];
+  };
+  behavior_fit: {
+    related_skills: string[];
+    related_workflows: string[];
+    related_domains: string[];
+    conflicts: string[];
+  };
+  execution_contract: {
+    keep: string[];
+    stop: string[];
+    start: string[];
+    success_signals: string[];
+    risk_signals: string[];
+    next_agent_bias: string[];
+  };
+  progress: {
+    trend: "up" | "flat" | "down";
+    summary: string;
+    latest_signals: string[];
+  };
+  artifacts: {
+    json_ref: string;
+    html_ref: string;
+    markdown_ref: string;
+  };
+}
+
+export interface BirthdayWishMemory {
+  latest_wish_ref: string;
+  generated_at: string;
+  source: BirthdayWishSource;
+  status: BirthdayWishStatus;
+  wish_text: string;
+  wish_type: BirthdayWishType;
+  horizon: "30d" | "90d" | "1y";
+  north_star_alignment: "high" | "medium" | "low";
+  groundedness: {
+    score: number;
+    level: "high" | "medium" | "low";
+    why: string[];
+  };
+  execution_contract: {
+    keep: string[];
+    stop: string[];
+    start: string[];
+    next_agent_bias: string[];
+  };
+  progress: {
+    trend: "up" | "flat" | "down";
+    summary: string;
+  };
+}
+
 export interface BirthdayCapsule {
   schema_version: 2;
   generated_at: string;
@@ -275,6 +347,7 @@ export interface AgentContext {
     warnings: string[];
   };
   birthday_memory?: BirthdayMemory;
+  birthday_wish?: BirthdayWishMemory;
 }
 
 export interface NmsConfig {

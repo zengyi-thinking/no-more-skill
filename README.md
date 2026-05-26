@@ -43,6 +43,7 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 - `/nms-report`：出报告。生成真实 `.nms` 数据驱动的 HTML 可视化报告。
 - `/nms-auto`：安全自动推进。读取 `.nms` 习惯，先模拟用户 workflow，再走 dry-run Gate。
 - `/nms-birthday`：生成“生日记忆胶囊”，把年度目标、边界和进化信号写成后续 Agent 可继承的资产。
+- `/nms-birthday-wish`：生成“生日愿望契约”，把下一阶段想长成什么样写成 Agent 可继承的长期偏置。
 
 `/nms-birthday` 不是一次性总结页，它会写入 `.nms/derived/birthday/latest.json`，后续 `/nms-auto` 会通过 Agent Context 自动继承这份 North Star 和下一阶段目标。
 
@@ -102,6 +103,7 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 - `/nms-report`
 - `/nms-auto`
 - `/nms-birthday`
+- `/nms-birthday-wish`
 - `/nms`（30 秒上手入口）
 
 这四个命令会自动调用内部能力。比如 `/nms-auto` 会透明使用 brief、suggest、guard 和 night gate；用户不需要记住这些内部步骤。
@@ -112,6 +114,7 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 - `/nms:report`
 - `/nms:auto`
 - `/nms:birthday`
+- `/nms:birthday-wish`
 
 如果你的宿主环境是 Codex 风格 `$<skill>-<function>`，也支持：
 
@@ -119,6 +122,7 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 - `$nms-report`
 - `$nms-auto`
 - `$nms-birthday`
+- `$nms-birthday-wish`
 
 > 注意：在本地 PowerShell 终端里测试 `$nms-*` 时，需要加引号，例：`npm run dev:skill -- '$nms-flow'`。在 Claude/Codex 宿主输入框里不需要引号。
 
@@ -204,6 +208,11 @@ npm run dev -- birthday
 - 生成 `.nms/derived/birthday/latest.json` 作为可继承记忆胶囊
 - 生成 `.nms/artifacts/birthday/latest/birthday.html` 作为生日/年度进化页面
 - 后续 `nms context` 和 `/nms-auto` 会读取 `birthday_memory`
+
+`nms birthday-wish`：
+- 生成 `.nms/derived/birthday-wish/latest.json` 作为下一阶段愿望契约
+- 生成 `.nms/artifacts/birthday-wish/latest/wish.html` 作为可展示页面
+- 后续 `nms context` 和 `/nms-auto` 会读取 `birthday_wish`
 
 Agent 内部能力仍然存在，但默认被 `/nms-auto` 接管，不需要普通用户主动记忆。
 

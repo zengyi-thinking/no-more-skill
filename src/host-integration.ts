@@ -50,7 +50,7 @@ interface WriteHostOptions {
   homeDir?: string;
 }
 
-const USER_COMMANDS = ["/nms", "/nms-flow", "/nms-report", "/nms-auto", "/nms-birthday"];
+const USER_COMMANDS = ["/nms", "/nms-flow", "/nms-report", "/nms-auto", "/nms-birthday", "/nms-birthday-wish"];
 
 function homePath(homeDir: string, ...parts: string[]): string {
   return path.join(homeDir, ...parts);
@@ -189,7 +189,7 @@ function hostDefinitions(homeDir: string) {
       label: "Codex",
       executable: "codex",
       skill_dir: codexSkill,
-      invocation: ["$nms-flow", "$nms-report", "$nms-auto", "$nms-birthday", "no-more-skill"]
+      invocation: ["$nms-flow", "$nms-report", "$nms-auto", "$nms-birthday", "$nms-birthday-wish", "no-more-skill"]
     },
     {
       name: "opencode" as const,
@@ -274,6 +274,7 @@ Human-facing entries:
 - \`/nms-report\`: real-data HTML report
 - \`/nms-auto\`: hidden Agent workflow with dry-run gate
 - \`/nms-birthday\`: living birthday memory capsule
+- \`/nms-birthday-wish\`: grounded future wish contract
 
 Internal commands such as context, brief, suggest, guard, night, doctor, data, and profile stay behind \`/nms-auto\` or diagnostics. Do not expose them as the normal user path.
 
@@ -284,6 +285,7 @@ If local shell execution is available, route through the installed runtime:
 - \`node "${normalizedRuntimePath}" /nms-report\`
 - \`node "${normalizedRuntimePath}" /nms-auto\`
 - \`node "${normalizedRuntimePath}" /nms-birthday\`
+- \`node "${normalizedRuntimePath}" /nms-birthday-wish\`
 
 Use only real \`.nms\` data. If no sessions exist, explain that NMS is still learning; never invent skill frequency, workflow history, reports, or personality claims.
 `;

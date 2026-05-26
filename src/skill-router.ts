@@ -6,6 +6,8 @@ import {
   flowCommand,
   flowVisualCommand,
   guardCommand,
+  guardPendingCommand,
+  ingestGuideCommand,
   ingestCommand,
   nightCommand,
   profileReviewCommand,
@@ -47,23 +49,20 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
   const args = input.args;
 
   const helpText = [
-    "NMS Skill Commands:",
-    "- /nms [flow|ingest|replay|night|doctor|report|data|profile|brief|suggest|guard] [flags]",
-    "- /nms-flow [--format human|json] [--visual]",
-    "- /nms-context --task <task> [--format json]",
-    "- /nms-brief --task <task> [--profile strict]",
-    "- /nms-suggest --task <task>",
-    "- /nms-guard --files <file,file>",
-    "- /nms-ingest --input <file>",
+    "NMS Skill Commands (zero-argument first):",
+    "- /nms-flow",
+    "- /nms-data",
+    "- /nms-profile",
+    "- /nms-context",
+    "- /nms-brief",
+    "- /nms-suggest",
+    "- /nms-guard",
     "- /nms-replay",
-    "- /nms-night --dry-run --task <task> [--explain]",
-    "- /nms-night --dry-run --task-file <task.json> [--explain]",
-    "- /nms-night --resume <id>",
-    "- /nms-night --apply --task-file <task.json>",
+    "- /nms-night",
     "- /nms-doctor",
-    "- /nms-data status [--format json]",
-    "- /nms-profile --review [--format json]",
-    "- /nms-report [--template video|daily|weekly|portfolio] [--image]"
+    "- /nms-report",
+    "- /nms-ingest",
+    "Advanced flags still work when an Agent needs automation, but users should start with the classified commands above."
   ].join("\n");
 
   const canonical = (() => {
@@ -88,6 +87,7 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     case "/nms-help":
       return helpText;
     case "/nms-ingest":
+      if (!args.input) return ingestGuideCommand();
       return ingestCommand(args.input as string | undefined);
     case "/nms-flow":
       if (toBool(args.visual)) {
@@ -109,7 +109,7 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         task: args.task as string | undefined,
         taskFile: (args["task-file"] as string | undefined) ?? (args.taskFile as string | undefined),
         format: (args.format as "markdown" | "json") ?? "markdown",
-        profile: (args.profile as "compact" | "full" | "strict") ?? "compact"
+        profile: (args.profile as "compact" | "full" | "strict") ?? "strict"
       });
     case "/nms-suggest":
       return suggestCommand({
@@ -122,7 +122,9 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
       const files = Array.isArray(rawFiles)
         ? rawFiles.map(String)
         : String(rawFiles).split(",").map((item) => item.trim()).filter(Boolean);
-      return guardCommand(files, (args.format as "human" | "json") ?? "human");
+      return files.length > 0
+        ? guardCommand(files, (args.format as "human" | "json") ?? "human")
+        : guardPendingCommand((args.format as "human" | "json") ?? "human");
     }
     case "/nms-replay":
       return replayCommand();
@@ -143,7 +145,7 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         baseUrl: args["base-url"] as string | undefined,
         apiKey: args["api-key"] as string | undefined,
         model: args.model as string | undefined,
-        format: (args.format as "md" | "html" | "json") ?? "md",
+        format: (args.format as "md" | "html" | "json") ?? "html",
         period: args.period as string | undefined,
         template: args.template as string | undefined,
         realOnly: args["real-only"] === undefined && args.realOnly === undefined

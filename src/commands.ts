@@ -25,11 +25,34 @@ function readPayload(inputFile?: string): string {
   return fs.readFileSync(0, "utf8");
 }
 
+function defaultTaskSummary(storage: JsonStorage): string {
+  const db = storage.load();
+  const topWorkflow = db.user_profile.top_workflows[0] ?? Object.entries(db.stats.workflow_counts)
+    .sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (topWorkflow) return `Continue from the most stable NMS workflow: ${topWorkflow}`;
+  const topDomain = Object.entries(db.stats.domain_counts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (topDomain) return `Continue work in the user's strongest observed domain: ${topDomain}`;
+  return "Inspect current NMS behavior context and prepare the next safe action";
+}
+
 export function ingestCommand(inputFile?: string): string {
   const raw = readPayload(inputFile);
   const parsed = InputSchema.parse(JSON.parse(raw)) as HookInput;
   const out = processCompressedEvent(parsed);
   return JSON.stringify(out, null, 2);
+}
+
+export function ingestGuideCommand(): string {
+  return [
+    "== NMS Ingest ==",
+    "This command needs a real compressed event. NMS will not create demo behavior data.",
+    "Use one of these real-data inputs:",
+    "- /nms-ingest --input input.json",
+    "- nms ingest --input input.json",
+    "- cat input.json | nms ingest",
+    "Required payload:",
+    "{\"compressed_text\":\"...\",\"conversation\":\"...\",\"tool\":\"claude|codex|opencode\"}"
+  ].join("\n");
 }
 
 function sha256(input: string): string {
@@ -508,6 +531,19 @@ function readTaskText(options?: { task?: string; taskFile?: string }): string {
   return options?.task?.trim() ?? "";
 }
 
+function pendingGitFiles(cwd = process.cwd()): string[] {
+  try {
+    const out = execSync("git status --porcelain", { cwd, stdio: "pipe" }).toString();
+    return out
+      .split(/\r?\n/)
+      .map((line) => line.slice(3).trim())
+      .map((file) => file.split(" -> ").at(-1)?.trim() ?? "")
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 export function briefCommand(options?: {
   task?: string;
   taskFile?: string;
@@ -515,7 +551,7 @@ export function briefCommand(options?: {
   profile?: "compact" | "full" | "strict";
 }): string {
   const storage = new JsonStorage();
-  const task = readTaskText(options);
+  const task = readTaskText(options) || defaultTaskSummary(storage);
   const profile = options?.profile ?? "compact";
   const context = storage.buildAgentContext(task);
   const payload = {
@@ -577,7 +613,7 @@ export function suggestCommand(options?: {
   const storage = new JsonStorage();
   const db = storage.load();
   const packs = storage.loadDomainPacks();
-  const task = readTaskText(options);
+  const task = readTaskText(options) || defaultTaskSummary(storage);
   const domainGuess = detectDomainFromText(task, packs);
   const pack = domainPackFor(domainGuess.domain, packs);
   const historicalWorkflow = Object.entries(db.stats.workflow_counts)
@@ -636,6 +672,31 @@ export function guardCommand(files: string[], format: "human" | "json" = "human"
     `files=${files.join(", ") || "(none)"}`,
     `allowed_roots=${payload.policy.allowed_roots.join(", ")}`
   ].join("\n");
+}
+
+export function guardPendingCommand(format: "human" | "json" = "human"): string {
+  const files = pendingGitFiles();
+  if (files.length === 0) {
+    const payload = {
+      ok: true,
+      files,
+      reason: "No pending git files detected. Nothing needs write-scope approval right now.",
+      policy: {
+        allowed_roots: DEFAULT_CONFIG.harness.allowed_roots,
+        core_explicit_whitelist: DEFAULT_CONFIG.harness.core_explicit_whitelist,
+        allowed_file_kinds: ["ui", "new", "test"]
+      }
+    };
+    if (format === "json") return JSON.stringify(payload, null, 2);
+    return [
+      "== NMS Guard ==",
+      "decision=ALLOW",
+      `reason=${payload.reason}`,
+      "files=(none)",
+      `allowed_roots=${payload.policy.allowed_roots.join(", ")}`
+    ].join("\n");
+  }
+  return guardCommand(files, format);
 }
 
 export function flowVisualCommand(): string {
@@ -800,10 +861,11 @@ export function nightCommand(options: {
     );
   }
   const storage = new JsonStorage();
+  const autoTask = options.task ?? (!options.taskFile && !apply ? defaultTaskSummary(storage) : undefined);
   const plannerInput = options.taskFile
     ? readPlannerInput(options.taskFile)
-    : options.task
-      ? buildPlannerFromTask(options.task, storage)
+    : autoTask
+      ? buildPlannerFromTask(autoTask, storage)
       : undefined;
   const report = runNightHarness({
     dryRun,
@@ -812,8 +874,8 @@ export function nightCommand(options: {
     plannerInput,
     timeBudgetMinutes: options.timeBudget ?? 5
   });
-  if (options.task && !options.taskFile) {
-    report.logs.push("Auto planner generated from --task. Review and persist a task-file before apply.");
+  if (autoTask && !options.taskFile) {
+    report.logs.push("Auto planner generated from route defaults or --task. Review and persist a task-file before apply.");
   }
   storage.trackPerf("night_ms", Number((performance.now() - started).toFixed(2)));
   storage.recordNightRun(report);

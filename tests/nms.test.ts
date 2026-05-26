@@ -251,12 +251,12 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
-  test("night without task-file returns config error", () => {
+  test("night without task-file auto-plans a safe dry-run", () => {
     withTempCwd(() => {
       const out = JSON.parse(nightCommand({ dryRun: true, explain: true }));
-      expect(out.final_state).toBe("ROLLBACK");
-      expect(out.failure.code).toBe("CONFIG_ERROR");
-      expect(out.failure.failure_reason).toContain("Missing planner input");
+      expect(out.dry_run).toBe(true);
+      expect(out.final_state).toBe("GATE");
+      expect(out.logs.join(" ")).toContain("Auto planner generated");
     });
   });
 
@@ -674,6 +674,38 @@ describe.sequential("NMS v0.2 optimization", () => {
     })();
   });
 
+  test("classified slash routes are callable without user parameters", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const routes = [
+          ["/nms-flow", "Behavior Cockpit"],
+          ["/nms-data", "NMS Data Status"],
+          ["/nms-profile", "NMS Profile Review"],
+          ["/nms-context", "NMS Agent Context"],
+          ["/nms-brief", "NMS Agent Brief"],
+          ["/nms-suggest", "NMS Suggest"],
+          ["/nms-guard", "NMS Guard"],
+          ["/nms-replay", "workflow"],
+          ["/nms-doctor", "NMS Doctor"],
+          ["/nms-ingest", "needs a real compressed event"]
+        ] as const;
+        for (const [slashCommand, expected] of routes) {
+          const out = await runSkillRoute({ slashCommand, args: {} });
+          expect(out).toContain(expected);
+        }
+
+        const night = await runSkillRoute({ slashCommand: "/nms-night", args: {} });
+        expect(night).toContain("\"final_state\": \"GATE\"");
+        expect(night).toContain("Auto planner generated");
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
   test("slash router maps /nms-night with task-file", async () => {
     await (async () => {
       const old = process.cwd();
@@ -702,7 +734,7 @@ describe.sequential("NMS v0.2 optimization", () => {
     })();
   });
 
-  test("slash router maps /nms-report and writes markdown", async () => {
+  test("slash router maps /nms-report and writes html by default", async () => {
     await (async () => {
       const old = process.cwd();
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
@@ -716,7 +748,10 @@ describe.sequential("NMS v0.2 optimization", () => {
         const reportPath = out.replace("Report generated: ", "").trim();
         expect(fs.existsSync(reportPath)).toBe(true);
         const content = fs.readFileSync(reportPath, "utf8");
-        expect(content).toContain("NMS 可视化周报");
+        expect(reportPath).toMatch(/report\.html$/);
+        expect(content).toContain("<html");
+        expect(content).toContain("No More Skill");
+        expect(content).toContain("Weekly Behavior Cockpit");
       } finally {
         process.chdir(old);
       }

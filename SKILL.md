@@ -15,19 +15,17 @@ NMS records real user behavior into `.nms`, derives workflow/profile snapshots, 
 
 - `npm run dev -- ingest --input <file>`
 - `npm run dev -- flow`
-- `npm run dev -- data status --format json`
-- `npm run dev -- profile --review --format json`
-- `npm run dev -- context --task "<task>" --format json`
-- `npm run dev -- brief --task "<task>" --profile strict`
-- `npm run dev -- suggest --task "<task>" --format json`
-- `npm run dev -- guard sandbox/new/file.tsx --format json`
+- `npm run dev -- data`
+- `npm run dev -- profile`
+- `npm run dev -- context`
+- `npm run dev -- brief`
+- `npm run dev -- suggest`
+- `npm run dev -- guard`
 - `npm run dev -- replay`
-- `npm run dev -- night --dry-run --task "<task>" --explain`
-- `npm run dev -- night --dry-run --task-file <task.json>`
-- `npm run dev -- night --resume night-`
+- `npm run dev -- night`
 - `npm run dev -- night --apply --task-file <task.json>`
-- `npm run dev -- report --format html --template weekly --real-only`
-- `npm run dev:skill -- /nms-context --task "<task>" --format json`
+- `npm run dev -- report`
+- `npm run dev:skill -- /nms-context`
 
 Slash routes:
 
@@ -43,6 +41,8 @@ Slash routes:
 - `/nms-night`
 - `/nms-doctor`
 - `/nms-report`
+
+Each classified slash route works without user-supplied flags. Advanced flags remain available for automation, but do not require users to memorize them.
 
 Runtime aliases:
 
@@ -82,7 +82,7 @@ Hook output:
 
 - Compatibility store: `.nms/data.json`
 - v3 store: `.nms/events`, `.nms/sessions`, `.nms/derived`, `.nms/artifacts`, `.nms/policies`, `.nms/domains`
-- Agent context: `nms context --format json`
+- Agent context: `nms context`
 - Night logs: `.nms/artifacts/night-runs`
 
 ## References

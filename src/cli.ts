@@ -8,6 +8,8 @@ import {
   flowCommand,
   flowVisualCommand,
   guardCommand,
+  guardPendingCommand,
+  ingestGuideCommand,
   ingestCommand,
   nightCommand,
   profileReviewCommand,
@@ -18,13 +20,17 @@ import {
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.0");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.1");
 
 program
   .command("ingest")
   .description("ingest compressed context payload from file or stdin")
   .option("-i, --input <file>", "input JSON file path")
   .action((opts) => {
+    if (!opts.input && process.stdin.isTTY) {
+      process.stdout.write(`${ingestGuideCommand()}\n`);
+      return;
+    }
     const out = ingestCommand(opts.input);
     process.stdout.write(`${out}\n`);
   });
@@ -95,7 +101,7 @@ program
   .option("--format <type>", "human or json", "human")
   .action((files, opts) => {
     const format = opts.format === "json" ? "json" : "human";
-    process.stdout.write(`${guardCommand(files, format)}\n`);
+    process.stdout.write(`${files.length > 0 ? guardCommand(files, format) : guardPendingCommand(format)}\n`);
   });
 
 program
@@ -181,7 +187,7 @@ program
   .option("--base-url <url>", "image relay endpoint url")
   .option("--api-key <key>", "image relay API key")
   .option("--model <name>", "image model, default gpt-image-2")
-  .option("--format <type>", "md, html, or json", "md")
+  .option("--format <type>", "md, html, or json", "html")
   .option("--period <range>", "report period, e.g. 1d or 7d", "7d")
   .option("--template <name>", "daily, weekly, video, or portfolio", "weekly")
   .option("--real-only", "only use real .nms data", true)

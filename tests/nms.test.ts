@@ -731,12 +731,14 @@ describe.sequential("NMS v0.2 optimization", () => {
         slashCommand: "/nms",
         args: {}
       });
-      expect(helpUnified).toContain("NMS Skill Commands");
+      expect(helpUnified).toContain("30 秒上手");
+      expect(helpUnified).toContain("Status: not_started");
       expect(helpUnified).toContain("- /nms-flow");
       expect(helpUnified).toContain("- /nms-report");
       expect(helpUnified).toContain("- /nms-auto");
       expect(helpUnified).toContain("- /nms-birthday");
-      expect(helpUnified).toContain("Internal Agent workflow steps are hidden");
+      expect(helpUnified).toContain("next: 让 Agent 调用 NMS ingest");
+      expect(helpUnified).toContain("Internal Agent steps stay hidden behind /nms-auto");
       expect(helpUnified).not.toContain("/nms-night");
       expect(helpUnified).not.toContain("/nms-brief");
       expect(helpUnified).not.toContain("/nms-guard");
@@ -755,6 +757,13 @@ describe.sequential("NMS v0.2 optimization", () => {
     expect(help).not.toMatch(/\n\s+night\b/);
     expect(help).not.toMatch(/\n\s+brief\b/);
     expect(help).not.toMatch(/\n\s+guard\b/);
+  });
+
+  test("bare cli command prints onboarding instead of doing nothing", () => {
+    const out = execSync("npm run -s dev", { cwd: process.cwd() }).toString();
+    expect(out).toContain("30 秒上手");
+    expect(out).toContain("/nms-flow");
+    expect(out).toContain("/nms-auto");
   });
 
   test("classified slash routes are callable without user parameters", async () => {

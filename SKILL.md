@@ -22,12 +22,13 @@ NMS records real user behavior into `.nms`, derives workflow/profile snapshots, 
 
 Slash routes:
 
+- `/nms`
 - `/nms-flow`
 - `/nms-report`
 - `/nms-auto`
 - `/nms-birthday`
 
-Internal Agent steps are intentionally hidden from user-facing help. Agents should use `/nms-auto` for the complete guarded workflow. `/nms-birthday` writes a living memory capsule that future `/nms-auto` runs can inherit.
+`/nms` is the onboarding entry. It shows the 30-second path based on real `.nms` state. Internal Agent steps are intentionally hidden from user-facing help. Agents should use `/nms-auto` for the complete guarded workflow. `/nms-birthday` writes a living memory capsule that future `/nms-auto` runs can inherit.
 
 Runtime aliases:
 

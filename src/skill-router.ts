@@ -12,6 +12,7 @@ import {
   ingestGuideCommand,
   ingestCommand,
   nightCommand,
+  onboardingCommand,
   profileReviewCommand,
   reportCommand,
   replayCommand,
@@ -50,17 +51,6 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
   })();
   const args = input.args;
 
-  const helpText = [
-    "NMS Skill Commands:",
-    "- /nms-flow",
-    "- /nms-report",
-    "- /nms-auto",
-    "- /nms-birthday",
-    "",
-    "Internal Agent workflow steps are hidden and run through /nms-auto.",
-    "Use /nms-birthday to generate a living memory capsule that future /nms-auto runs can inherit."
-  ].join("\n");
-
   const canonical = (() => {
     if (cmd === "/nms" || cmd === "$nms") {
       const action = String(args.action ?? args.cmd ?? args.sub ?? args.command ?? "help").toLowerCase();
@@ -81,7 +71,7 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
 
   switch (canonical) {
     case "/nms-help":
-      return helpText;
+      return onboardingCommand((args.format as "human" | "json") ?? "human");
     case "/nms-ingest":
       if (!args.input) return ingestGuideCommand();
       return ingestCommand(args.input as string | undefined);
@@ -168,6 +158,10 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     case "/nms-profile":
       return profileReviewCommand((args.format as "human" | "json") ?? "human");
     default:
-      return `Unsupported slash command: ${cmd}\n\n${helpText}`;
+      return [
+        `Unsupported slash command: ${cmd}`,
+        "",
+        onboardingCommand("human")
+      ].join("\n");
   }
 }

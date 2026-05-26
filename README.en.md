@@ -13,6 +13,21 @@ It is a behavior-engineering system that learns how you work and runs a guarded 
 
 In one line: **from prompt engineering to behavior engineering + execution system.**
 
+## Start In 30 Seconds
+
+After installation, run:
+
+```bash
+/nms
+```
+
+It reads the current `.nms` data state and tells you the next action. With empty data, NMS says it is still learning instead of inventing a profile. Shortest path:
+
+1. Feed one real compressed event: ask the Agent to call NMS ingest, or run `nms ingest --input input.json`
+2. Inspect the behavior cockpit: `/nms-flow`
+3. Let the Agent run a safe dry-run workflow: `/nms-auto`
+4. Generate an inheritable memory asset: `/nms-birthday`
+
 ## What makes it different
 
 1. It learns behavior traces, not only static prompts.

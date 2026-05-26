@@ -15,6 +15,7 @@ NMS core skill for behavior learning, workflow replay, explainable night runs, a
 - `/nms-birthday`
 
 These are the only commands that should be promoted to users. They are zero-argument first.
+Use `/nms` as the onboarding entry; it explains the 30-second path and the current data state.
 
 ## Hidden Agent workflow
 

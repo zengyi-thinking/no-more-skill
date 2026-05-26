@@ -55,6 +55,90 @@ export function ingestGuideCommand(): string {
   ].join("\n");
 }
 
+export function onboardingCommand(format: "human" | "json" = "human"): string {
+  const data = JSON.parse(dataStatusCommand("json")) as {
+    sample_count: number;
+    latest_session_at: string | null;
+    quality: Stats["quality_metrics"];
+    warnings: string[];
+  };
+  const status = data.sample_count === 0
+    ? "not_started"
+    : data.quality.workflow_confidence < 0.5
+      ? "learning"
+      : "ready";
+  const steps = data.sample_count === 0
+    ? [
+        {
+          title: "喂入第一条真实行为",
+          why: "NMS 不使用 demo 数据；没有真实 compress 事件时不会推断你的偏好。",
+          command: "让 Agent 调用 NMS ingest，或本地运行：nms ingest --input input.json"
+        },
+        {
+          title: "查看行为驾驶舱",
+          why: "确认 skill、workflow、style 是否从真实数据里长出来。",
+          command: "/nms-flow"
+        },
+        {
+          title: "生成第一个可继承资产",
+          why: "birthday capsule 会被后续 /nms-auto 继承。",
+          command: "/nms-birthday"
+        }
+      ]
+    : [
+        {
+          title: "看趋势",
+          why: "先确认最近 workflow、skill 频率和数据健康度。",
+          command: "/nms-flow"
+        },
+        {
+          title: "让 Agent 安全模拟执行",
+          why: "它会隐藏读取 context、brief、suggest、guard、night gate 的内部流程。",
+          command: "/nms-auto"
+        },
+        {
+          title: "生成可展示报告或生日胶囊",
+          why: "报告用于展示，birthday memory 用于长期继承。",
+          command: "/nms-report 或 /nms-birthday"
+        }
+      ];
+  const payload = {
+    entry: "/nms",
+    status,
+    data_quality: {
+      sample_count: data.sample_count,
+      latest_session_at: data.latest_session_at,
+      behavior_score: data.quality.behavior_score,
+      workflow_confidence: data.quality.workflow_confidence,
+      stale_risk: data.quality.stale_risk,
+      warnings: data.warnings
+    },
+    user_commands: ["/nms-flow", "/nms-report", "/nms-auto", "/nms-birthday"],
+    thirty_second_path: steps,
+    principle: "Use real .nms data only. Empty data is a learning state, not an error."
+  };
+  if (format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    "== NMS 30 秒上手 / 30-Second Start ==",
+    `Status: ${status}`,
+    `Samples: ${payload.data_quality.sample_count}`,
+    `Behavior Score: ${payload.data_quality.behavior_score}`,
+    `Workflow Confidence: ${payload.data_quality.workflow_confidence}`,
+    payload.principle,
+    "",
+    "== 你只需要记住这四个入口 ==",
+    "- /nms-flow      看趋势和 skill/workflow 频率",
+    "- /nms-report    生成真实数据报告",
+    "- /nms-auto      让 Agent 读取习惯并安全 dry-run",
+    "- /nms-birthday  生成可继承的生日记忆胶囊",
+    "",
+    "== 下一步 / Next Steps ==",
+    ...steps.map((step, index) => `${index + 1}. ${step.title}\nwhy: ${step.why}\nnext: ${step.command}`),
+    "",
+    "Internal Agent steps stay hidden behind /nms-auto."
+  ].join("\n");
+}
+
 function sha256(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
 }

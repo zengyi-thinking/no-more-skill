@@ -14,6 +14,7 @@ import {
   ingestGuideCommand,
   ingestCommand,
   nightCommand,
+  onboardingCommand,
   profileReviewCommand,
   reportCommand,
   replayCommand,
@@ -22,7 +23,11 @@ import {
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.4");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.5");
+
+program.action(() => {
+  process.stdout.write(`${onboardingCommand()}\n`);
+});
 
 program
   .command("ingest", { hidden: true })

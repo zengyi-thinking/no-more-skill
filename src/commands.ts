@@ -699,6 +699,64 @@ export function guardPendingCommand(format: "human" | "json" = "human"): string 
   return guardCommand(files, format);
 }
 
+export function autoCommand(format: "human" | "json" = "human"): string {
+  const data = JSON.parse(dataStatusCommand("json")) as {
+    sample_count: number;
+    quality: Stats["quality_metrics"];
+    warnings: string[];
+  };
+  const brief = briefCommand({ profile: "strict" });
+  const suggestion = suggestCommand({ format: "human" });
+  const guard = guardPendingCommand("human");
+  const night = JSON.parse(nightCommand({ dryRun: true, explain: true })) as {
+    dry_run: boolean;
+    final_state: string;
+    logs: string[];
+    explain_chain?: string[];
+    failure?: unknown;
+  };
+  const payload = {
+    mode: "dry-run",
+    entry: "/nms-auto",
+    data_quality: {
+      sample_count: data.sample_count,
+      behavior_score: data.quality.behavior_score,
+      workflow_confidence: data.quality.workflow_confidence,
+      warnings: data.warnings
+    },
+    guard_summary: guard,
+    night_summary: {
+      dry_run: night.dry_run,
+      final_state: night.final_state,
+      explain_chain: night.explain_chain ?? [],
+      failure: night.failure ?? null
+    },
+    next_step: night.final_state === State.GATE
+      ? "Review the dry-run output. Use an explicit reviewed task-file before any apply."
+      : "Fix the reported policy/test/review issue, then run /nms-auto again."
+  };
+
+  if (format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    "== NMS Auto ==",
+    "Mode: dry-run only",
+    "Purpose: read .nms behavior data, simulate the user's workflow, and run the guarded execution gate.",
+    `Samples: ${payload.data_quality.sample_count}`,
+    `Behavior Score: ${payload.data_quality.behavior_score}`,
+    `Workflow Confidence: ${payload.data_quality.workflow_confidence}`,
+    "== Agent Brief ==",
+    brief,
+    "== Suggested Workflow ==",
+    suggestion,
+    "== Write Guard ==",
+    guard,
+    "== Execution Gate ==",
+    `final_state=${payload.night_summary.final_state}`,
+    ...(payload.night_summary.explain_chain.length > 0 ? payload.night_summary.explain_chain : ["No explain chain available."]),
+    `Next: ${payload.next_step}`
+  ].join("\n");
+}
+
 export function flowVisualCommand(): string {
   const storage = new JsonStorage();
   const db = storage.load();

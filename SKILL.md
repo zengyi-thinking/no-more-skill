@@ -13,41 +13,24 @@ NMS records real user behavior into `.nms`, derives workflow/profile snapshots, 
 
 ## Commands
 
-- `npm run dev -- ingest --input <file>`
 - `npm run dev -- flow`
-- `npm run dev -- data`
-- `npm run dev -- profile`
-- `npm run dev -- context`
-- `npm run dev -- brief`
-- `npm run dev -- suggest`
-- `npm run dev -- guard`
-- `npm run dev -- replay`
-- `npm run dev -- night`
-- `npm run dev -- night --apply --task-file <task.json>`
 - `npm run dev -- report`
-- `npm run dev:skill -- /nms-context`
+- `npm run dev -- auto`
+- `npm run dev -- ingest --input <file>`
+- `npm run dev:skill -- /nms-flow`
 
 Slash routes:
 
-- `/nms-ingest`
 - `/nms-flow`
-- `/nms-data`
-- `/nms-profile`
-- `/nms-context`
-- `/nms-brief`
-- `/nms-suggest`
-- `/nms-guard`
-- `/nms-replay`
-- `/nms-night`
-- `/nms-doctor`
 - `/nms-report`
+- `/nms-auto`
 
-Each classified slash route works without user-supplied flags. Advanced flags remain available for automation, but do not require users to memorize them.
+Internal routes remain available for Agents and diagnostics: `/nms-context`, `/nms-brief`, `/nms-suggest`, `/nms-guard`, `/nms-night`, `/nms-replay`, `/nms-ingest`, `/nms-data`, `/nms-profile`, `/nms-doctor`.
 
 Runtime aliases:
 
-- GSD/Gemini: `/nms:flow`, `/nms:context`, `/nms:brief`, `/nms:guard`, `/nms:night`, `/nms:report`
-- Codex: `$nms-flow`, `$nms-context`, `$nms-brief`, `$nms-guard`, `$nms-night`, `$nms-report`
+- GSD/Gemini: `/nms:flow`, `/nms:report`, `/nms:auto`
+- Codex: `$nms-flow`, `$nms-report`, `$nms-auto`
 
 Install:
 
@@ -82,7 +65,7 @@ Hook output:
 
 - Compatibility store: `.nms/data.json`
 - v3 store: `.nms/events`, `.nms/sessions`, `.nms/derived`, `.nms/artifacts`, `.nms/policies`, `.nms/domains`
-- Agent context: `nms context`
+- Agent context: internal `nms context`
 - Night logs: `.nms/artifacts/night-runs`
 
 ## References

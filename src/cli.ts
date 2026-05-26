@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import {
+  autoCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -20,7 +21,7 @@ import {
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.1");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.2");
 
 program
   .command("ingest")
@@ -92,6 +93,15 @@ program
   .action((opts) => {
     const format = opts.format === "json" ? "json" : "human";
     process.stdout.write(`${suggestCommand({ task: opts.task, taskFile: opts.taskFile, format })}\n`);
+  });
+
+program
+  .command("auto")
+  .description("run the user-facing guarded dry-run automation entry")
+  .option("--format <type>", "human or json", "human")
+  .action((opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    process.stdout.write(`${autoCommand(format)}\n`);
   });
 
 program

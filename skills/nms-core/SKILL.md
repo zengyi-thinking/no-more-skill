@@ -7,34 +7,39 @@ description: Core No More Skill runtime for `.nms` behavior storage, workflow re
 
 NMS core skill for behavior learning, workflow replay, explainable night runs, and visual reporting.
 
-## Slash commands
+## User-facing slash commands
 
 - `/nms-flow`
-- `/nms-data`
-- `/nms-profile`
-- `/nms-context`
+- `/nms-report`
+- `/nms-auto`
+
+These are the only commands that should be promoted to users. They are zero-argument first.
+
+## Agent/internal slash commands
+
 - `/nms-brief`
 - `/nms-suggest`
 - `/nms-guard`
-- `/nms-replay`
+- `/nms-context`
 - `/nms-night`
-- `/nms-doctor`
-- `/nms-report`
+- `/nms-replay`
 - `/nms-ingest`
-
-All classified slash commands above are zero-argument first. Advanced flags still work for automation, but the user-facing path should start from these direct routes.
+- `/nms-data`
+- `/nms-profile`
+- `/nms-doctor`
 
 ## Runtime aliases
 
-- GSD style: `/nms:flow`, `/nms:brief`, `/nms:guard`, `/nms:night`
-- Codex style: `$nms-flow`, `$nms-brief`, `$nms-guard`, `$nms-night`
+- GSD style: `/nms:flow`, `/nms:report`, `/nms:auto`
+- Codex style: `$nms-flow`, `$nms-report`, `$nms-auto`
 - Agent route mode: `nms route --cmd /nms-flow`
 
 ## Notes
 
 - `--apply` is explicit and guarded.
-- `/nms-night` auto-planning is dry-run only; `--task-file` is required for production apply.
-- `/nms-context` and `/nms-brief` are the preferred Agent entries before doing user-specific work.
+- `/nms-auto` wraps `.nms` data, brief, suggest, guard, and dry-run gate for users.
+- `/nms-night` is the internal execution engine; `--task-file` is required for production apply.
+- `/nms-context` and `/nms-brief` are internal Agent entries before doing user-specific work.
 - `/nms-guard` checks pending Git files by default; pass explicit files only for automation.
 - Reports must use real `.nms` data; if samples are missing, say so instead of inventing.
 

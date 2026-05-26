@@ -1,4 +1,5 @@
 import {
+  autoCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -51,6 +52,10 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
   const helpText = [
     "NMS Skill Commands (zero-argument first):",
     "- /nms-flow",
+    "- /nms-report",
+    "- /nms-auto",
+    "",
+    "Agent/internal commands:",
     "- /nms-data",
     "- /nms-profile",
     "- /nms-context",
@@ -58,9 +63,8 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     "- /nms-suggest",
     "- /nms-guard",
     "- /nms-replay",
-    "- /nms-night",
     "- /nms-doctor",
-    "- /nms-report",
+    "- /nms-night",
     "- /nms-ingest",
     "Advanced flags still work when an Agent needs automation, but users should start with the classified commands above."
   ].join("\n");
@@ -89,6 +93,8 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     case "/nms-ingest":
       if (!args.input) return ingestGuideCommand();
       return ingestCommand(args.input as string | undefined);
+    case "/nms-auto":
+      return autoCommand((args.format as "human" | "json") ?? "human");
     case "/nms-flow":
       if (toBool(args.visual)) {
         const out = flowVisualCommand();

@@ -31,9 +31,14 @@ If `data_quality.sample_count` is low, do not infer strong preferences. Say that
 6. Execute the task within policy and run validation when code or files are changed.
 7. If the interaction should become training data, ask the host to call `nms ingest` with a real compressed event.
 
-## Slash Routes
+## User-Facing Slash Routes
 
 - `/nms-flow`
+- `/nms-report`
+- `/nms-auto`
+
+## Internal Slash Routes
+
 - `/nms-data`
 - `/nms-profile`
 - `/nms-context`
@@ -43,7 +48,6 @@ If `data_quality.sample_count` is low, do not infer strong preferences. Say that
 - `/nms-replay`
 - `/nms-night`
 - `/nms-doctor`
-- `/nms-report`
 - `/nms-ingest`
 
 ## Constraints
@@ -52,4 +56,4 @@ If `data_quality.sample_count` is low, do not infer strong preferences. Say that
 - Do not invent skill frequency, workflows, or profile traits.
 - Do not expose raw conversation text by default.
 - Treat `safety_policy.requires_explicit_apply=true` as a hard boundary.
-- Treat default `nms night` as dry-run-only. Apply mode requires an explicit reviewed task file.
+- Treat default `nms auto` and `nms night` as dry-run-only. Apply mode requires an explicit reviewed task file.

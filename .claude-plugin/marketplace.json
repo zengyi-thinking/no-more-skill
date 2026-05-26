@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "NMS: behavior learning, workflow replay, safe night harness, and visual reports.",
-    "version": "0.4.1"
+    "version": "0.4.2"
   },
   "plugins": [
     {

@@ -5,6 +5,7 @@ import { execSync } from "node:child_process";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import {
+  autoCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -448,6 +449,16 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
+  test("auto command wraps behavior context, guard, and dry-run gate", () => {
+    withTempCwd(() => {
+      const out = JSON.parse(autoCommand("json"));
+      expect(out.entry).toBe("/nms-auto");
+      expect(out.mode).toBe("dry-run");
+      expect(out.night_summary.final_state).toBe("GATE");
+      expect(out.next_step).toContain("task-file");
+    });
+  });
+
   test("v3 sessions can rebuild compatibility data when data.json is missing", () => {
     withTempCwd(() => {
       const payload = {
@@ -668,6 +679,10 @@ describe.sequential("NMS v0.2 optimization", () => {
         args: {}
       });
       expect(helpUnified).toContain("NMS Skill Commands");
+      expect(helpUnified.indexOf("- /nms-flow")).toBeLessThan(helpUnified.indexOf("Agent/internal commands:"));
+      expect(helpUnified.indexOf("- /nms-report")).toBeLessThan(helpUnified.indexOf("Agent/internal commands:"));
+      expect(helpUnified.indexOf("- /nms-auto")).toBeLessThan(helpUnified.indexOf("Agent/internal commands:"));
+      expect(helpUnified.indexOf("- /nms-night")).toBeGreaterThan(helpUnified.indexOf("Agent/internal commands:"));
     } finally {
         process.chdir(old);
       }
@@ -682,6 +697,7 @@ describe.sequential("NMS v0.2 optimization", () => {
       try {
         const routes = [
           ["/nms-flow", "Behavior Cockpit"],
+          ["/nms-auto", "NMS Auto"],
           ["/nms-data", "NMS Data Status"],
           ["/nms-profile", "NMS Profile Review"],
           ["/nms-context", "NMS Agent Context"],

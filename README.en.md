@@ -21,20 +21,30 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 4. It is explainable: `nms night --explain` shows why gate passed or rolled back.
 5. It is not limited to coding: domain packs let writing, research, learning, product, content, or your own domains use the same behavior model.
 
-## Core Commands
+## User-Facing Commands
 
-- `nms ingest`: ingest compressed context and extract skills/workflows
-- `nms flow`: readable behavior cockpit by default
-- `nms data`: inspect `.nms` trust level, samples, artifacts, and domain coverage
-- `nms profile`: turn learned profile into evidence-backed claims for review
-- `nms context`: export agent-readable user behavior context
-- `nms brief`: generate a preflight agent brief with style, workflow, risks, and safety policy
-- `nms suggest`: recommend a task workflow from real history first, then domain packs
-- `nms guard`: preflight write paths and file kinds before an Agent edits
-- `nms replay`: replay the most common workflow
-- `nms night`: guarded night loop with default safe dry-run planning
-- `nms doctor`: read-only diagnostics
-- `nms report`: real-data reports with daily/weekly/video/portfolio templates (optional image rendering)
+Most users only need three commands:
+
+- `/nms-flow`: inspect recent workflows, skill frequency, user style, and data health.
+- `/nms-report`: generate a visual HTML report from real `.nms` behavior data.
+- `/nms-auto`: simulate the user's workflow from `.nms` and run the guarded dry-run gate.
+
+`/nms-birthday` is planned next for birthday/yearly persona evolution reports. It will become user-facing only after the implementation is real.
+
+## Agent / Internal Capabilities
+
+These commands remain available, but they should not be promoted as the main user interface:
+
+- `/nms-brief`: read user habits, style, constraints, and safety policy before an Agent starts.
+- `/nms-suggest`: recommend a workflow from history and domain packs.
+- `/nms-guard`: check write paths, file kinds, and policy scope; defaults to pending Git files.
+- `/nms-context`: export agent-readable behavior context.
+- `/nms-night`: internal state machine for PLAN -> EXECUTE -> TEST -> REVIEW -> GATE.
+- `/nms-replay`: replay the most common workflow for `/nms-flow` and `/nms-auto`.
+- `/nms-ingest`: ingest real compress events, ideally from a host hook.
+- `/nms-data`: inspect `.nms` data quality, samples, artifacts, and domain coverage.
+- `/nms-profile`: review evidence behind learned profile claims.
+- `/nms-doctor`: diagnose local system/data health when something looks wrong.
 
 ## Domain Packs
 
@@ -75,38 +85,25 @@ Do not commit a real `.nms` folder to a public repository unless you have review
 
 ## Slash Skill Routing
 
-If your host uses `/<skill>-<function>` style, call the classified command directly. No parameters are required for normal use:
+If your host uses `/<skill>-<function>` style, normal users should call:
 
 - `/nms-flow`
-- `/nms-data`
-- `/nms-profile`
-- `/nms-context`
-- `/nms-brief`
-- `/nms-suggest`
-- `/nms-guard`
-- `/nms-replay`
-- `/nms-night`
-- `/nms-doctor`
 - `/nms-report`
-- `/nms-ingest`
+- `/nms-auto`
 
-These commands have safe defaults: `/nms-report` generates HTML, `/nms-night` runs dry-run, `/nms-guard` checks pending Git files, and `/nms-ingest` shows a real-data ingestion guide instead of creating demo data.
+These commands call internal capabilities automatically. For example, `/nms-auto` transparently uses brief, suggest, guard, and the night gate.
 
 GSD/Gemini style aliases:
 
 - `/nms:flow`
-- `/nms:brief`
-- `/nms:guard`
-- `/nms:night`
 - `/nms:report`
+- `/nms:auto`
 
 Codex style aliases:
 
 - `$nms-flow`
-- `$nms-brief`
-- `$nms-guard`
-- `$nms-night`
 - `$nms-report`
+- `$nms-auto`
 
 > Note: when testing `$nms-*` in local PowerShell, quote the command token: `npm run dev:skill -- '$nms-flow'`. In host command palettes, quoting is not required.
 
@@ -145,26 +142,16 @@ Run:
 ```bash
 npm run dev -- ingest --input input.json
 npm run dev -- flow
-npm run dev -- data
-npm run dev -- profile
-npm run dev -- context
-npm run dev -- brief
-npm run dev -- suggest
-npm run dev -- guard
-npm run dev -- flow --visual
-npm run dev -- replay
-npm run dev -- night
-npm run dev -- doctor
 npm run dev -- report
+npm run dev -- auto
 ```
 
 ## Output Experience
 
 - `nms flow --visual` creates `.nms/flow-dashboard.html` with domain mix, skill frequency, main workflow path, and workflow edges.
-- `nms context` includes relevant domains, workflows, avoid-list, and safety policy for other Agents.
-- `nms brief / suggest / guard` gives Agents a preflight brief, a workflow suggestion, and a hard write-scope check before editing.
 - `nms report` generates a product-style HTML cockpit report from real `.nms` data by default.
-- `nms night` auto-plans only in dry-run mode by default; production apply still requires an explicit reviewed task file.
+- `nms auto` reads `.nms`, infers the workflow, runs guard, and enters the dry-run gate without applying changes.
+- Agent-internal commands such as `context / brief / suggest / guard / night / data / profile / doctor / ingest` stay available but do not need to be memorized by users.
 
 ## Safety Boundaries
 

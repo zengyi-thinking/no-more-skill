@@ -20,20 +20,30 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 4. 它可审计：night 模式支持 `--explain`，清楚告诉你为什么通过/回滚。
 5. 它不只服务编程：`domain pack` 能把写作、研究、学习、产品、内容创作等场景接入同一套行为模型。
 
-## 核心能力
+## 用户主入口
 
-- `nms ingest`: 注入压缩上下文，提取 skill/workflow 并更新用户画像
-- `nms flow`: 专业行为驾驶舱，默认可读输出
-- `nms data`: 检查 `.nms` 数据可信度、样本量、artifact 和领域覆盖
-- `nms profile`: 把用户画像拆成“可审查的证据声明”，避免 Agent 过度脑补
-- `nms context`: 导出 Agent 可直接使用的用户习惯上下文
-- `nms brief`: 给 Agent 的任务前简报，压缩用户风格、workflow、风险和安全规则
-- `nms suggest`: 根据真实历史和 domain pack 推荐任务 workflow
-- `nms guard`: 写文件前做路径与文件类型预检
-- `nms replay`: 复现最常用 workflow
-- `nms night`: 受控夜间执行，默认自动规划安全 dry-run
-- `nms doctor`: 只读健康诊断（数据完整性、schema、git 安全状态）
-- `nms report`: 生成真实使用报告（支持 daily/weekly/video/portfolio 模板，可选出图）
+普通用户只需要记住三个命令：
+
+- `/nms-flow`：看趋势。展示最近 workflow、skill 频率、用户风格和数据健康度。
+- `/nms-report`：出报告。生成真实 `.nms` 数据驱动的 HTML 可视化报告。
+- `/nms-auto`：安全自动推进。读取 `.nms` 习惯，先模拟用户 workflow，再走 dry-run Gate。
+
+下一步会新增 `/nms-birthday`，用于生日/年度人格进化报告。它会在实现完成后再进入主入口，避免提前暴露空功能。
+
+## Agent / 内部能力
+
+下面这些命令仍然可用，但不建议作为普通用户主入口宣传：
+
+- `/nms-brief`：Agent 开工前读取用户习惯、风格、禁忌和安全边界。
+- `/nms-suggest`：根据历史 workflow 和 domain pack 推荐任务流程。
+- `/nms-guard`：写入前检查路径、文件类型和权限范围，默认检查当前 Git 待改文件。
+- `/nms-context`：导出 Agent 可读的用户行为上下文。
+- `/nms-night`：底层执行状态机，负责 PLAN -> EXECUTE -> TEST -> REVIEW -> GATE。
+- `/nms-replay`：复用最常用 workflow，主要服务 `/nms-flow` 和 `/nms-auto`。
+- `/nms-ingest`：采集真实 compress 数据，应由 hook 或宿主集成自动触发。
+- `/nms-data`：检查 `.nms` 数据质量、样本量、artifact、domain 覆盖。
+- `/nms-profile`：审查用户画像证据。
+- `/nms-doctor`：系统健康诊断，出问题时再提示用户运行。
 
 ## 领域扩展：不只 Coding
 
@@ -74,40 +84,25 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 
 ### Skill 调用格式（Slash Route）
 
-如果你的宿主环境习惯 `/<skill>-<function>`，直接敲分类命令即可，不需要先记参数：
+如果你的宿主环境习惯 `/<skill>-<function>`，普通用户只需要直接调用：
 
 - `/nms-flow`
-- `/nms-data`
-- `/nms-profile`
-- `/nms-context`
-- `/nms-brief`
-- `/nms-suggest`
-- `/nms-guard`
-- `/nms-replay`
-- `/nms-night`
-- `/nms-doctor`
 - `/nms-report`
-- `/nms-ingest`
+- `/nms-auto`
 
-这些命令都有安全默认值：`/nms-report` 默认生成 HTML，`/nms-night` 默认 dry-run，`/nms-guard` 默认检查当前 Git 待改文件，`/nms-ingest` 在没有真实输入时只给采集说明，不会生成 demo 数据。
+这三个命令会自动调用内部能力。比如 `/nms-auto` 会透明使用 brief、suggest、guard 和 night gate；用户不需要记住这些内部步骤。
 
 如果你的宿主环境偏好 GSD 风格 `/<skill>:<function>`，也同样支持：
 
-- `/nms:ingest`
 - `/nms:flow`
-- `/nms:brief`
-- `/nms:guard`
-- `/nms:replay`
-- `/nms:night`
-- `/nms:doctor`
+- `/nms:report`
+- `/nms:auto`
 
 如果你的宿主环境是 Codex 风格 `$<skill>-<function>`，也支持：
 
 - `$nms-flow`
-- `$nms-brief`
-- `$nms-guard`
-- `$nms-night`
 - `$nms-report`
+- `$nms-auto`
 
 > 注意：在本地 PowerShell 终端里测试 `$nms-*` 时，需要加引号，例：`npm run dev:skill -- '$nms-flow'`。在 Claude/Codex 宿主输入框里不需要引号。
 
@@ -154,17 +149,8 @@ npm run build
 ```bash
 npm run dev -- ingest --input input.json
 npm run dev -- flow
-npm run dev -- data
-npm run dev -- profile
-npm run dev -- context
-npm run dev -- brief
-npm run dev -- suggest
-npm run dev -- guard
-npm run dev -- flow --visual
-npm run dev -- replay
-npm run dev -- night
-npm run dev -- doctor
 npm run dev -- report
+npm run dev -- auto
 ```
 
 ## 输出长什么样
@@ -177,24 +163,17 @@ npm run dev -- report
 - 连续使用天数
 - 可执行建议（`why + next command`）
 
-`nms flow --visual`：
-- 生成本地 HTML 图表面板：`.nms/flow-dashboard.html`
-- 展示领域分布、技能频率、主 workflow 路径和 workflow 转移边
-
-`nms context`：
-- 输出用户沟通风格、常用 workflow、禁忌项、安全策略
-- 输出 relevant domains，便于 Agent 判断当前任务更像 coding、writing、research 还是其他领域
-- 适合 Agent 在执行任务前读取，而不是直接解析 `.nms` 内部文件
-
-`nms brief / suggest / guard`：
-- `brief` 给 Agent 一份任务前简报，明确样本量、置信度、用户风格和硬性安全规则
-- `suggest` 用真实历史优先，其次才用领域模板，给出 `why + next commands`
-- `guard` 在写文件前检查路径白名单和 UI/new/test 文件类型，越权直接阻断
-
 `nms report`：
 - 默认生成 `.nms/artifacts/reports/latest/report.md` 或 `report.html`
 - HTML 报告包含领域分布、skill 频率、主 workflow 路径、workflow 边、用户风格和下一步命令
 - 默认生成 HTML 周报；高级自动化仍可指定 daily/weekly/video/portfolio 模板
+
+`nms auto`：
+- 默认 dry-run，不会直接写仓库
+- 内部读取 brief/context，推断 workflow，运行 guard，再进入 night gate
+- 输出 Gate 结果和下一步建议
+
+Agent 内部会用到 `context / brief / suggest / guard / night / data / profile / doctor / ingest`，但这些不需要普通用户主动记忆。
 
 `nms report --image`：
 - 调用你配置的中转站（默认模型 `gpt-image-2`）输出三张图：

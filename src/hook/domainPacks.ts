@@ -22,7 +22,7 @@ export const DEFAULT_DOMAIN_PACKS: DomainPack[] = [
       "发布类": ["平台适配", "发布复盘"]
     },
     workflow_templates: [["选题分析", "大纲生成", "草稿生成", "结构优化", "发布复盘"]],
-    style_signals: [{ name: "结构化表达", patterns: ["先", "再", "最后", "分步骤"] }]
+    style_signals: [{ name: "结构化表达", patterns: ["先", "再", "最后", "分步骤", "写作", "文章", "标题", "读者"] }]
   },
   {
     domain: "research",
@@ -32,7 +32,7 @@ export const DEFAULT_DOMAIN_PACKS: DomainPack[] = [
       "生成类": ["结论归纳", "研究报告"]
     },
     workflow_templates: [["问题定义", "资料收集", "交叉验证", "结论归纳"]],
-    style_signals: [{ name: "证据优先", patterns: ["来源", "证据", "验证", "引用"] }]
+    style_signals: [{ name: "证据优先", patterns: ["研究", "资料", "来源", "证据", "验证", "引用"] }]
   },
   {
     domain: "learning",
@@ -42,7 +42,7 @@ export const DEFAULT_DOMAIN_PACKS: DomainPack[] = [
       "复盘类": ["学习复盘"]
     },
     workflow_templates: [["学习目标", "资料选择", "练习", "反馈", "学习复盘"]],
-    style_signals: [{ name: "迭代学习", patterns: ["练习", "反馈", "复盘"] }]
+    style_signals: [{ name: "迭代学习", patterns: ["学习", "课程", "练习", "反馈", "学习复盘"] }]
   },
   {
     domain: "product",
@@ -52,17 +52,17 @@ export const DEFAULT_DOMAIN_PACKS: DomainPack[] = [
       "发布类": ["演示", "推广"]
     },
     workflow_templates: [["需求分析", "用户分析", "原型设计", "演示", "推广"]],
-    style_signals: [{ name: "产品交付", patterns: ["用户", "场景", "推广", "演示"] }]
+    style_signals: [{ name: "产品交付", patterns: ["产品", "需求", "用户", "场景", "推广", "演示"] }]
   },
   {
     domain: "content",
     skills: {
       "创作类": ["口播", "分镜"],
       "视觉类": ["页面", "图片"],
-      "发布类": ["发布", "复盘"]
+      "发布类": ["发布", "内容复盘"]
     },
-    workflow_templates: [["口播", "分镜", "页面", "图片", "发布"]],
-    style_signals: [{ name: "内容生产", patterns: ["口播", "分镜", "视频", "发布"] }]
+    workflow_templates: [["口播", "分镜", "页面", "图片", "发布", "内容复盘"]],
+    style_signals: [{ name: "内容生产", patterns: ["内容", "口播", "分镜", "视频", "发布"] }]
   }
 ];
 

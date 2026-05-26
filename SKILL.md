@@ -15,18 +15,30 @@ NMS records real user behavior into `.nms`, derives workflow/profile snapshots, 
 
 - `npm run dev -- ingest --input <file>`
 - `npm run dev -- flow`
+- `npm run dev -- data status --format json`
+- `npm run dev -- profile --review --format json`
 - `npm run dev -- context --task "<task>" --format json`
+- `npm run dev -- brief --task "<task>" --profile strict`
+- `npm run dev -- suggest --task "<task>" --format json`
+- `npm run dev -- guard sandbox/new/file.tsx --format json`
 - `npm run dev -- replay`
+- `npm run dev -- night --dry-run --task "<task>" --explain`
 - `npm run dev -- night --dry-run --task-file <task.json>`
+- `npm run dev -- night --resume night-`
 - `npm run dev -- night --apply --task-file <task.json>`
-- `npm run dev -- report --format html --real-only`
+- `npm run dev -- report --format html --template weekly --real-only`
 - `npm run dev:skill -- /nms-context --task "<task>" --format json`
 
 Slash routes:
 
 - `/nms-ingest`
 - `/nms-flow`
+- `/nms-data`
+- `/nms-profile`
 - `/nms-context`
+- `/nms-brief`
+- `/nms-suggest`
+- `/nms-guard`
 - `/nms-replay`
 - `/nms-night`
 - `/nms-doctor`
@@ -34,8 +46,8 @@ Slash routes:
 
 Runtime aliases:
 
-- GSD/Gemini: `/nms:flow`, `/nms:context`, `/nms:night`, `/nms:report`
-- Codex: `$nms-flow`, `$nms-context`, `$nms-night`, `$nms-report`
+- GSD/Gemini: `/nms:flow`, `/nms:context`, `/nms:brief`, `/nms:guard`, `/nms:night`, `/nms:report`
+- Codex: `$nms-flow`, `$nms-context`, `$nms-brief`, `$nms-guard`, `$nms-night`, `$nms-report`
 
 Install:
 

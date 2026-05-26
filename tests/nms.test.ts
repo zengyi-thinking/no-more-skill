@@ -5,14 +5,19 @@ import { execSync } from "node:child_process";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import {
+  briefCommand,
   contextCommand,
+  dataStatusCommand,
   doctorCommand,
   flowCommand,
   flowVisualCommand,
+  guardCommand,
   ingestCommand,
   nightCommand,
+  profileReviewCommand,
   reportCommand,
-  replayCommand
+  replayCommand,
+  suggestCommand
 } from "../src/commands.js";
 import { cleanSessions } from "../src/hook/cleaner.js";
 import { runSkillRoute } from "../src/skill-router.js";
@@ -255,6 +260,44 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
+  test("night can auto-plan dry-run task and resume previous run", () => {
+    withTempCwd(() => {
+      const out = JSON.parse(nightCommand({ dryRun: true, explain: true, task: "写一篇文章并生成周报", timeBudget: 1 }));
+      expect(out.dry_run).toBe(true);
+      expect(out.final_state).toBe("GATE");
+      expect(out.logs.join(" ")).toContain("Auto planner generated");
+
+      const resume = JSON.parse(nightCommand({ resume: "night-" }));
+      expect(resume.resumed).toBe(true);
+      expect(resume.artifact).toContain("artifacts/night-runs");
+    });
+  });
+
+  test("night auto-plan refuses apply without explicit task-file", () => {
+    withTempCwd(() => {
+      const out = JSON.parse(nightCommand({ apply: true, task: "unsafe apply without task-file" }));
+      expect(out.final_state).toBe("ROLLBACK");
+      expect(out.failure.code).toBe("CONFIG_ERROR");
+      expect(out.failure.failure_reason).toContain("task-file");
+    });
+  });
+
+  test("night rejects conflicting apply and dry-run flags", () => {
+    withTempCwd(() => {
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(taskFile, JSON.stringify({
+        task: "conflicting flags",
+        files: ["sandbox/new/demo.ts"],
+        constraints: ["new file only"],
+        test_plan: ["node -e \"process.exit(0)\""]
+      }), "utf8");
+      const out = JSON.parse(nightCommand({ apply: true, dryRun: true, taskFile }));
+      expect(out.final_state).toBe("ROLLBACK");
+      expect(out.failure.code).toBe("CONFIG_ERROR");
+      expect(out.failure.failure_reason).toBe("Conflicting flags");
+    });
+  });
+
   test("night does not allow skipping test phase", () => {
     withTempCwd(() => {
       const taskFile = path.join(process.cwd(), "task.json");
@@ -350,6 +393,61 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
+  test("data status and profile review explain .nms quality", () => {
+    withTempCwd(() => {
+      const payload = {
+        compressed_text: "PRD分析 UI生成 代码生成",
+        conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+        tool: "codex"
+      };
+      const inputFile = path.join(process.cwd(), "input.json");
+      fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+      ingestCommand(inputFile);
+
+      const status = JSON.parse(dataStatusCommand("json"));
+      expect(status.schema_version).toBe(3);
+      expect(status.sample_count).toBe(1);
+      expect(status.facts.domain_packs).toBeGreaterThan(0);
+      expect(status.domain_coverage[0].name).toBe("coding");
+
+      const review = JSON.parse(profileReviewCommand("json"));
+      expect(review.review_policy).toContain("draft");
+      expect(review.claims.length).toBeGreaterThan(0);
+      expect(review.claims.some((claim: { evidence_refs: string[] }) => claim.evidence_refs.length > 0)).toBe(true);
+    });
+  });
+
+  test("agent brief, suggest, and guard provide actionable preflight context", () => {
+    withTempCwd(() => {
+      const payload = {
+        compressed_text: "写作项目：先 选题分析，再 大纲生成，最后 草稿生成",
+        conversation: "文章写作流程：选题分析 -> 大纲生成 -> 草稿生成",
+        tool: "codex"
+      };
+      const inputFile = path.join(process.cwd(), "input.json");
+      fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+      ingestCommand(inputFile);
+
+      const brief = briefCommand({ task: "写一篇文章", profile: "strict" });
+      expect(brief).toContain("NMS Agent Brief");
+      expect(brief).toContain("nms guard");
+
+      const suggestion = JSON.parse(suggestCommand({ task: "写一篇文章", format: "json" }));
+      expect(suggestion.detected_domain).toBe("writing");
+      expect(suggestion.suggested_workflow).toContain("选题分析");
+
+      const researchSuggestion = JSON.parse(suggestCommand({ task: "做一个研究复盘", format: "json" }));
+      expect(researchSuggestion.detected_domain).toBe("research");
+
+      const allowed = JSON.parse(guardCommand(["sandbox/new/demo.tsx"], "json"));
+      const blocked = JSON.parse(guardCommand(["src/core/secret.ts"], "json"));
+      const empty = JSON.parse(guardCommand([], "json"));
+      expect(allowed.ok).toBe(true);
+      expect(blocked.ok).toBe(false);
+      expect(empty.ok).toBe(false);
+    });
+  });
+
   test("v3 sessions can rebuild compatibility data when data.json is missing", () => {
     withTempCwd(() => {
       const payload = {
@@ -432,6 +530,35 @@ describe.sequential("NMS v0.2 optimization", () => {
         const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
         expect(report.sample_count).toBe(1);
         expect(report.top_skills).toEqual([["UI生成", 1]]);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("report templates produce purpose-specific html and json", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const payload = {
+          compressed_text: "PRD分析 UI生成 代码生成",
+          conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+          tool: "codex"
+        };
+        const inputFile = path.join(process.cwd(), "input.json");
+        fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+        ingestCommand(inputFile);
+
+        const htmlPath = await reportCommand({ format: "html", realOnly: true, period: "7d", template: "video" });
+        const html = fs.readFileSync(htmlPath, "utf8");
+        expect(html).toContain("Video Presentation Script");
+        expect(html).toContain("开场定位");
+
+        const jsonPath = await reportCommand({ format: "json", realOnly: true, period: "7d", template: "portfolio" });
+        const json = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+        expect(json.template).toBe("portfolio");
       } finally {
         process.chdir(old);
       }

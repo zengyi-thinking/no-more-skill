@@ -12,24 +12,32 @@ NMS core skill for behavior learning, workflow replay, explainable night runs, a
 - `/nms action=flow|ingest|replay|night|doctor|report` (统一入口)
 - `/nms-ingest --input <file>`
 - `/nms-flow [--format human|json] [--visual]`
+- `/nms-data status [--format human|json]`
+- `/nms-profile --review [--format human|json]`
 - `/nms-context --task <task> [--format human|json]`
+- `/nms-brief --task <task> [--profile compact|full|strict] [--format markdown|json]`
+- `/nms-suggest --task <task> [--format human|json]`
+- `/nms-guard --files <file,file> [--format human|json]`
 - `/nms-replay`
+- `/nms-night --dry-run --task <task> [--explain]`
 - `/nms-night --dry-run --task-file <task.json> [--explain]`
+- `/nms-night --resume <id>`
 - `/nms-night --apply --task-file <task.json>`
 - `/nms-doctor`
-- `/nms-report [--format md|html|json] [--image] [--real-only]`
+- `/nms-report [--format md|html|json] [--template daily|weekly|video|portfolio] [--image] [--real-only]`
 
 ## Runtime aliases
 
-- GSD style: `/nms:flow`, `/nms:night`
-- Codex style: `$nms-flow`, `$nms-night`
+- GSD style: `/nms:flow`, `/nms:brief`, `/nms:guard`, `/nms:night`
+- Codex style: `$nms-flow`, `$nms-brief`, `$nms-guard`, `$nms-night`
 - Agent route mode: `nms route --cmd /nms-flow --args-json "{\"format\":\"json\"}"`
 
 ## Notes
 
 - `--apply` is explicit and guarded.
-- `--task-file` is required for production night runs.
+- `--task` auto-planning is dry-run only; `--task-file` is required for production night runs.
 - `nms context --format json` is the preferred Agent entry before doing user-specific work.
+- `nms brief --profile strict` plus `nms guard --files ...` is the preferred preflight before editing files.
 - Reports must use real `.nms` data; if samples are missing, say so instead of inventing.
 
 ## References

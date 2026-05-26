@@ -3,17 +3,22 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { z } from "zod";
+import { DEFAULT_CONFIG } from "./config.js";
+import { validateWriteScope } from "./harness/guards.js";
 import { readPlannerInput, runNightHarness } from "./harness/engine.js";
 import { processCompressedEvent } from "./hook/engine.js";
-import { detectSessionDomain } from "./hook/domainPacks.js";
+import { detectDomainFromText, detectSessionDomain, domainPackFor } from "./hook/domainPacks.js";
 import { JsonStorage } from "./storage.js";
-import type { HookInput, SessionRecord, Stats } from "./types.js";
+import { State } from "./types.js";
+import type { AgentContext, HookInput, PlannerOutput, SessionRecord, Stats } from "./types.js";
 
 const InputSchema = z.object({
   compressed_text: z.string(),
   conversation: z.string(),
   tool: z.enum(["claude", "codex", "opencode"])
 });
+
+type ReportTemplate = "daily" | "weekly" | "video" | "portfolio";
 
 function readPayload(inputFile?: string): string {
   if (inputFile) return fs.readFileSync(inputFile, "utf8");
@@ -34,6 +39,31 @@ function sha256(input: string): string {
 function avg(values: number[]): number {
   if (values.length === 0) return 0;
   return Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2));
+}
+
+function readArtifactRegistry(storage: JsonStorage): unknown[] {
+  const registryPath = path.join(storage.root, "artifacts", "artifacts.json");
+  if (!fs.existsSync(registryPath)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(registryPath, "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function countFiles(root: string, suffix?: string): number {
+  if (!fs.existsSync(root)) return 0;
+  let count = 0;
+  const visit = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) visit(full);
+      if (entry.isFile() && (!suffix || entry.name.endsWith(suffix))) count += 1;
+    }
+  };
+  visit(root);
+  return count;
 }
 
 function parsePeriodDays(period = "7d"): number | undefined {
@@ -131,6 +161,106 @@ function workflowEdgeCounts(sessions: SessionRecord[]): Array<{ from: string; to
     }
   }
   return [...counts.values()].sort((a, b) => b.count - a.count);
+}
+
+function normalizeReportTemplate(template?: string): ReportTemplate {
+  if (template === "daily" || template === "video" || template === "portfolio") return template;
+  return "weekly";
+}
+
+function reportTemplateCopy(template: ReportTemplate): { title: string; description: string; mdHeading: string } {
+  const copies: Record<ReportTemplate, { title: string; description: string; mdHeading: string }> = {
+    daily: {
+      title: "Daily Operating Brief",
+      description: "聚焦今天/近期的真实行为信号，适合每日复盘和明日行动安排。",
+      mdHeading: "每日行动简报"
+    },
+    weekly: {
+      title: "Weekly Behavior Cockpit",
+      description: "聚焦周期内的领域分布、技能频率、workflow 稳定性和下一步建议。",
+      mdHeading: "周度行为驾驶舱"
+    },
+    video: {
+      title: "Video Presentation Script",
+      description: "为 3-5 分钟产品讲解准备：一句话定位、三段亮点、演示路径和收尾口播。",
+      mdHeading: "视频讲解模板"
+    },
+    portfolio: {
+      title: "Portfolio Evidence Board",
+      description: "把真实行为数据整理成可展示的作品证据：能力、流程、产出和安全边界。",
+      mdHeading: "作品集证据板"
+    }
+  };
+  return copies[template];
+}
+
+function reportTemplateMarkdown(template: ReportTemplate, topDomains: [string, number][], topWorkflows: [string, number][]): string {
+  if (template === "video") {
+    return [
+      "## 视频讲解结构",
+      "",
+      "1. 开场：NMS 不是 prompt 收藏夹，而是让 Agent 学会真实工作方式的行为系统。",
+      "2. 展示：打开 flow/report，看领域分布、skill 频率和 workflow 路径。",
+      "3. 证明：调用 context/guard/night，说明 Agent 能读偏好、守边界、先 dry-run。",
+      "4. 收尾：强调所有指标来自真实 `.nms` 数据，样本不足不会编造。",
+      "",
+      `推荐主线：${topWorkflows[0]?.[0] ?? "暂无稳定 workflow"}`,
+      `主要领域：${topDomains[0]?.[0] ?? "暂无领域样本"}`
+    ].join("\n");
+  }
+  if (template === "daily") {
+    return [
+      "## 今日行动简报",
+      "",
+      "- 今天优先复用最高置信 workflow。",
+      "- 若样本不足，先采集真实 ingest，再让 Agent 执行。",
+      "- 写文件前先运行 `nms guard --files ...`。"
+    ].join("\n");
+  }
+  if (template === "portfolio") {
+    return [
+      "## 作品集证据板",
+      "",
+      "- 能力证据：Top skills 来自真实会话频率。",
+      "- 流程证据：Workflow path 来自真实执行顺序。",
+      "- 安全证据：Night harness 默认 dry-run 且有 Gate。",
+      "- 可信证据：报告 artifact 已登记到 `.nms/artifacts/artifacts.json`。"
+    ].join("\n");
+  }
+  return [
+    "## 周度复盘焦点",
+    "",
+    "- 本周看领域分布是否集中。",
+    "- 看主 workflow 置信度是否提升。",
+    "- 看陈旧风险是否需要刷新样本。",
+    "- 根据下一步命令继续推进。"
+  ].join("\n");
+}
+
+function reportTemplateHtml(template: ReportTemplate, topDomains: [string, number][], topWorkflows: [string, number][]): string {
+  const copy = reportTemplateCopy(template);
+  const workflow = escapeHtml(topWorkflows[0]?.[0] ?? "暂无稳定 workflow");
+  const domain = escapeHtml(topDomains[0]?.[0] ?? "暂无领域样本");
+  const body: Record<ReportTemplate, string> = {
+    video: `
+      <div class="step"><div class="dot">1</div><div><strong>开场定位</strong><div class="muted">NMS 不是 prompt 收藏夹，而是个人 Agent 行为操作台。</div></div></div>
+      <div class="step"><div class="dot">2</div><div><strong>数据展示</strong><div class="muted">展示领域分布、skill 频率、主 workflow：${workflow}。</div></div></div>
+      <div class="step"><div class="dot">3</div><div><strong>可信证明</strong><div class="muted">强调 report/context/guard/night 都读取真实 .nms 数据。</div></div></div>
+      <div class="step"><div class="dot">4</div><div><strong>收尾口播</strong><div class="muted">让 Agent 越用越懂你，但永远先守安全边界。</div></div></div>`,
+    daily: `
+      <div class="step"><div class="dot">1</div><div><strong>今日主领域</strong><div class="muted">${domain}</div></div></div>
+      <div class="step"><div class="dot">2</div><div><strong>下一步动作</strong><div class="muted">先刷新真实样本，再复用主 workflow。</div></div></div>
+      <div class="step"><div class="dot">3</div><div><strong>执行前检查</strong><div class="muted">写文件前运行 nms guard。</div></div></div>`,
+    weekly: `
+      <div class="step"><div class="dot">1</div><div><strong>主领域</strong><div class="muted">${domain}</div></div></div>
+      <div class="step"><div class="dot">2</div><div><strong>主 workflow</strong><div class="muted">${workflow}</div></div></div>
+      <div class="step"><div class="dot">3</div><div><strong>复盘重点</strong><div class="muted">观察 workflow confidence、stale risk 和下一步建议。</div></div></div>`,
+    portfolio: `
+      <div class="step"><div class="dot">1</div><div><strong>能力证据</strong><div class="muted">Top skills 由真实 session 频率支撑。</div></div></div>
+      <div class="step"><div class="dot">2</div><div><strong>流程证据</strong><div class="muted">Workflow path 由真实执行顺序支撑。</div></div></div>
+      <div class="step"><div class="dot">3</div><div><strong>安全证据</strong><div class="muted">Night harness 默认 dry-run，apply 受白名单和 Gate 约束。</div></div></div>`
+  };
+  return `<section class="card"><h2>${copy.title}</h2><p class="muted">${copy.description}</p><div class="timeline">${body[template]}</div></section>`;
 }
 
 function flowSuggestions(db: ReturnType<JsonStorage["load"]>): Array<{ title: string; why: string; next_command: string }> {
@@ -286,6 +416,228 @@ export function contextCommand(options?: {
   ].join("\n");
 }
 
+export function dataStatusCommand(format: "human" | "json" = "human"): string {
+  const storage = new JsonStorage();
+  const db = storage.load();
+  const artifacts = readArtifactRegistry(storage);
+  const sessions = [...db.sessions].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const latest = sessions[0];
+  const domainEntries = Object.entries(db.stats.domain_counts).sort((a, b) => b[1] - a[1]);
+  const warnings: string[] = [];
+  if (db.sessions.length === 0) warnings.push("No real sessions yet; do not infer user preferences.");
+  if (db.stats.quality_metrics.workflow_confidence < 0.5) warnings.push("Workflow confidence is low; keep suggestions tentative.");
+  if (db.stats.quality_metrics.stale_risk >= 60) warnings.push("High stale risk; refresh with recent ingest data.");
+
+  const payload = {
+    schema_version: db.schema_version,
+    root: storage.root,
+    sample_count: db.sessions.length,
+    latest_session_at: latest?.created_at ?? null,
+    domain_coverage: domainEntries.map(([name, count]) => ({ name, count })),
+    top_skills: Object.entries(db.stats.skill_counts).sort((a, b) => b[1] - a[1]).slice(0, 8),
+    top_workflows: Object.entries(db.stats.workflow_counts).sort((a, b) => b[1] - a[1]).slice(0, 5),
+    quality: db.stats.quality_metrics,
+    facts: {
+      event_files: countFiles(path.join(storage.root, "events"), ".jsonl"),
+      session_files: countFiles(path.join(storage.root, "sessions"), ".json"),
+      artifact_records: artifacts.length,
+      domain_packs: storage.loadDomainPacks().length
+    },
+    warnings
+  };
+
+  if (format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    "== NMS Data Status ==",
+    `schema_version=${payload.schema_version}`,
+    `root=${payload.root}`,
+    `samples=${payload.sample_count}`,
+    `latest_session_at=${payload.latest_session_at ?? "(none)"}`,
+    `domain_coverage=${payload.domain_coverage.map((item) => `${item.name}(${item.count})`).join(", ") || "(none)"}`,
+    `quality=behavior:${payload.quality.behavior_score}, workflow_confidence:${payload.quality.workflow_confidence}, stale:${payload.quality.stale_risk}%`,
+    `facts=events:${payload.facts.event_files}, sessions:${payload.facts.session_files}, artifacts:${payload.facts.artifact_records}, domains:${payload.facts.domain_packs}`,
+    "warnings:",
+    ...(warnings.length > 0 ? warnings.map((warning) => `- ${warning}`) : ["- none"])
+  ].join("\n");
+}
+
+export function profileReviewCommand(format: "human" | "json" = "human"): string {
+  const storage = new JsonStorage();
+  const db = storage.load();
+  const totalSessions = Math.max(1, db.sessions.length);
+  const claims = [
+    ...db.user_profile.top_skills.map((skill) => ({
+      dimension: "skill",
+      claim: `User frequently uses ${skill}`,
+      confidence: Number(((db.stats.skill_counts[skill] ?? 0) / totalSessions).toFixed(3)),
+      evidence_refs: db.sessions.filter((session) => session.skills_used.includes(skill)).slice(0, 3).map((session) => session.id),
+      status: "draft"
+    })),
+    ...db.user_profile.top_workflows.map((workflow) => ({
+      dimension: "workflow",
+      claim: `User often follows workflow: ${workflow}`,
+      confidence: Number(((db.stats.workflow_counts[workflow] ?? 0) / totalSessions).toFixed(3)),
+      evidence_refs: db.sessions.filter((session) => session.workflow.join(" -> ") === workflow).slice(0, 3).map((session) => session.id),
+      status: "draft"
+    })),
+    {
+      dimension: "style",
+      claim: db.user_profile.style === "unknown" ? "User style is not stable yet" : `User communication style: ${db.user_profile.style}`,
+      confidence: db.user_profile.style === "unknown" ? 0 : Math.min(1, db.sessions.length / 5),
+      evidence_refs: db.sessions.slice(-3).map((session) => session.id),
+      status: "draft"
+    }
+  ];
+  const payload = {
+    generated_at: new Date().toISOString(),
+    sample_count: db.sessions.length,
+    review_policy: "Claims are draft until the user confirms them. Do not treat low-confidence claims as hard preferences.",
+    claims
+  };
+  if (format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    "== NMS Profile Review ==",
+    `samples=${payload.sample_count}`,
+    payload.review_policy,
+    ...claims.map((claim, index) => `${index + 1}. [${claim.dimension}] ${claim.claim}\nconfidence=${claim.confidence}\nevidence=${claim.evidence_refs.join(", ") || "(none)"}`)
+  ].join("\n");
+}
+
+function readTaskText(options?: { task?: string; taskFile?: string }): string {
+  if (options?.taskFile) return fs.readFileSync(options.taskFile, "utf8").trim();
+  return options?.task?.trim() ?? "";
+}
+
+export function briefCommand(options?: {
+  task?: string;
+  taskFile?: string;
+  format?: "markdown" | "json";
+  profile?: "compact" | "full" | "strict";
+}): string {
+  const storage = new JsonStorage();
+  const task = readTaskText(options);
+  const profile = options?.profile ?? "compact";
+  const context = storage.buildAgentContext(task);
+  const payload = {
+    task_summary: context.task_summary,
+    profile,
+    sample_count: context.data_quality.sample_count,
+    confidence: context.data_quality.confidence,
+    user_style: context.user_style,
+    relevant_domains: context.relevant_domains,
+    relevant_workflows: profile === "compact" ? context.relevant_workflows.slice(0, 2) : context.relevant_workflows,
+    recommended_agent_behavior: context.recommended_agent_behavior,
+    safety_policy: context.safety_policy,
+    warnings: context.data_quality.warnings
+  };
+  if (options?.format === "json") return JSON.stringify(payload, null, 2);
+  const strictLines = profile === "strict"
+    ? [
+        "- Treat safety_policy as hard requirements.",
+        "- Do not invent user preferences beyond evidence.",
+        "- Before writing files, run `nms guard --files ...`."
+      ]
+    : [];
+  return [
+    "# NMS Agent Brief",
+    "",
+    `Task: ${payload.task_summary}`,
+    `Samples: ${payload.sample_count}`,
+    `Confidence: ${payload.confidence}`,
+    "",
+    "## User Style",
+    `- Communication: ${payload.user_style.communication.join(", ")}`,
+    `- Workflow preference: ${payload.user_style.workflow.join(", ")}`,
+    `- Avoid: ${payload.user_style.avoid.join(", ")}`,
+    "",
+    "## Relevant Domains",
+    ...(payload.relevant_domains.length > 0
+      ? payload.relevant_domains.map((domain) => `- ${domain.name}: ${domain.count} samples, confidence ${domain.confidence}`)
+      : ["- none yet"]),
+    "",
+    "## Relevant Workflows",
+    ...(payload.relevant_workflows.length > 0
+      ? payload.relevant_workflows.map((workflow) => `- ${workflow.name} (${workflow.confidence})`)
+      : ["- none yet"]),
+    "",
+    "## Agent Rules",
+    ...payload.recommended_agent_behavior.map((item) => `- ${item}`),
+    ...strictLines,
+    "",
+    "## Warnings",
+    ...(payload.warnings.length > 0 ? payload.warnings.map((warning) => `- ${warning}`) : ["- none"])
+  ].join("\n");
+}
+
+export function suggestCommand(options?: {
+  task?: string;
+  taskFile?: string;
+  format?: "human" | "json";
+}): string {
+  const storage = new JsonStorage();
+  const db = storage.load();
+  const packs = storage.loadDomainPacks();
+  const task = readTaskText(options);
+  const domainGuess = detectDomainFromText(task, packs);
+  const pack = domainPackFor(domainGuess.domain, packs);
+  const historicalWorkflow = Object.entries(db.stats.workflow_counts)
+    .map(([workflow, count]) => ({ workflow, count, steps: workflow.split(" -> ") }))
+    .filter((item) => item.steps.some((step) => Object.values(pack.skills).flat().includes(step)))
+    .sort((a, b) => b.count - a.count)[0];
+  const template = pack.workflow_templates[0] ?? [];
+  const steps = historicalWorkflow?.steps.length ? historicalWorkflow.steps : template;
+  const payload = {
+    task_summary: task || "(not provided)",
+    detected_domain: domainGuess.domain,
+    domain_confidence: domainGuess.confidence,
+    source: historicalWorkflow ? "history" : "domain_template",
+    suggested_workflow: steps,
+    why: historicalWorkflow
+      ? `Matched historical workflow used ${historicalWorkflow.count} time(s).`
+      : `No stable history for this task; using ${pack.domain} domain template.`,
+    next_commands: [
+      `nms brief --task "${task || "your task"}" --profile strict`,
+      "nms guard --files sandbox/new/example.tsx",
+      "nms night --dry-run --explain --task-file task.json"
+    ]
+  };
+  if (options?.format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    "== NMS Suggest ==",
+    `task=${payload.task_summary}`,
+    `domain=${payload.detected_domain} (${payload.domain_confidence})`,
+    `source=${payload.source}`,
+    `workflow=${payload.suggested_workflow.join(" -> ") || "(none)"}`,
+    `why=${payload.why}`,
+    "next:",
+    ...payload.next_commands.map((command) => `- ${command}`)
+  ].join("\n");
+}
+
+export function guardCommand(files: string[], format: "human" | "json" = "human"): string {
+  const guard = files.length === 0
+    ? { ok: false, reason: "No files provided for write-scope check." }
+    : validateWriteScope(files, DEFAULT_CONFIG);
+  const payload = {
+    ok: guard.ok,
+    files,
+    reason: guard.reason ?? "All files are inside allowed roots and file types.",
+    policy: {
+      allowed_roots: DEFAULT_CONFIG.harness.allowed_roots,
+      core_explicit_whitelist: DEFAULT_CONFIG.harness.core_explicit_whitelist,
+      allowed_file_kinds: ["ui", "new", "test"]
+    }
+  };
+  if (format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    "== NMS Guard ==",
+    `decision=${payload.ok ? "ALLOW" : "BLOCK"}`,
+    `reason=${payload.reason}`,
+    `files=${files.join(", ") || "(none)"}`,
+    `allowed_roots=${payload.policy.allowed_roots.join(", ")}`
+  ].join("\n");
+}
+
 export function flowVisualCommand(): string {
   const storage = new JsonStorage();
   const db = storage.load();
@@ -419,11 +771,40 @@ export function nightCommand(options: {
   timeBudget?: number;
   explain?: boolean;
   taskFile?: string;
+  task?: string;
+  resume?: string;
 }): string {
+  if (options.resume) return resumeNightRunCommand(options.resume);
   const started = performance.now();
   const apply = Boolean(options.apply);
-  const dryRun = apply ? false : options.dryRun ?? true;
-  const plannerInput = options.taskFile ? readPlannerInput(options.taskFile) : undefined;
+  const dryRun = apply ? Boolean(options.dryRun) : options.dryRun ?? true;
+  if (apply && options.task && !options.taskFile) {
+    return JSON.stringify(
+      {
+        dry_run: false,
+        final_state: State.ROLLBACK,
+        retries: 0,
+        logs: ["Auto-planned --task is dry-run only. Provide --task-file for apply."],
+        failure: {
+          code: "CONFIG_ERROR",
+          failure_reason: "Apply requires explicit task-file",
+          recovery_hint: "Run dry-run first, then create a reviewed task-file for --apply.",
+          retry_count: 0,
+          non_retryable: true,
+          state_at_failure: State.PLAN,
+          artifacts_ref: "task"
+        }
+      },
+      null,
+      2
+    );
+  }
+  const storage = new JsonStorage();
+  const plannerInput = options.taskFile
+    ? readPlannerInput(options.taskFile)
+    : options.task
+      ? buildPlannerFromTask(options.task, storage)
+      : undefined;
   const report = runNightHarness({
     dryRun,
     apply,
@@ -431,10 +812,66 @@ export function nightCommand(options: {
     plannerInput,
     timeBudgetMinutes: options.timeBudget ?? 5
   });
-  const storage = new JsonStorage();
+  if (options.task && !options.taskFile) {
+    report.logs.push("Auto planner generated from --task. Review and persist a task-file before apply.");
+  }
   storage.trackPerf("night_ms", Number((performance.now() - started).toFixed(2)));
   storage.recordNightRun(report);
   return JSON.stringify(report, null, 2);
+}
+
+function buildPlannerFromTask(task: string, storage: JsonStorage): PlannerOutput {
+  const packs = storage.loadDomainPacks();
+  const domainGuess = detectDomainFromText(task, packs);
+  const pack = domainPackFor(domainGuess.domain, packs);
+  const workflow = pack.workflow_templates[0] ?? [];
+  return {
+    task,
+    files: ["sandbox/new/nms-night-plan.md"],
+    constraints: [
+      "auto-planned dry-run only",
+      "do not apply without an explicit reviewed task-file",
+      `detected_domain=${domainGuess.domain}`,
+      `suggested_workflow=${workflow.join(" -> ") || "none"}`
+    ],
+    test_plan: ["node -e \"process.exit(0)\""]
+  };
+}
+
+function resumeNightRunCommand(resumeId: string): string {
+  const storage = new JsonStorage();
+  const runDir = path.join(storage.root, "artifacts", "night-runs");
+  const files = fs.existsSync(runDir)
+    ? fs.readdirSync(runDir).filter((entry) => entry.endsWith(".json"))
+    : [];
+  const match = files.find((file) => file.includes(resumeId)) ?? files.sort().at(-1);
+  if (!match) {
+    return JSON.stringify(
+      {
+        resumed: false,
+        resume_id: resumeId,
+        recovery_hint: "No night-run artifact found. Run nms night --dry-run --task-file task.json first."
+      },
+      null,
+      2
+    );
+  }
+  const fullPath = path.join(runDir, match);
+  const previous = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+  return JSON.stringify(
+    {
+      resumed: true,
+      resume_id: resumeId,
+      artifact: path.relative(storage.root, fullPath).replaceAll("\\", "/"),
+      previous_final_state: previous.final_state,
+      previous_failure: previous.failure ?? null,
+      next_step: previous.failure
+        ? previous.failure.recovery_hint
+        : "Previous run did not fail. Use --task-file with --apply only after reviewing the generated plan."
+    },
+    null,
+    2
+  );
 }
 
 export function doctorCommand(): string {
@@ -610,12 +1047,15 @@ export async function reportCommand(options?: {
   model?: string;
   format?: "md" | "html" | "json";
   period?: string;
+  template?: string;
   realOnly?: boolean;
 }): Promise<string> {
   const storage = new JsonStorage();
   const db = storage.load();
   const packs = storage.loadDomainPacks();
   const period = options?.period ?? "7d";
+  const template = normalizeReportTemplate(options?.template);
+  const templateCopy = reportTemplateCopy(template);
   const sessionsWithDomains = db.sessions.map((session) => ({
     ...session,
     domain: detectSessionDomain(session, packs)
@@ -639,7 +1079,7 @@ export async function reportCommand(options?: {
     .slice(0, 6);
   const workflowEdges = workflowEdgeCounts(reportSessions).slice(0, 8);
   const quality = reportQualityMetrics(reportSessions, counts.workflowCounts);
-  const sourceHash = sha256(JSON.stringify({ sessions: reportSessions.length, period, topSkills, topWorkflows, topDomains, workflowEdges, quality }));
+  const sourceHash = sha256(JSON.stringify({ sessions: reportSessions.length, period, template, topSkills, topWorkflows, topDomains, workflowEdges, quality }));
 
   const progressSummary = [
     `周期内会话数: ${reportSessions.length}`,
@@ -734,6 +1174,7 @@ export async function reportCommand(options?: {
   const reportPayload = {
     generated_at: new Date().toISOString(),
     period,
+    template,
     real_only: options?.realOnly ?? true,
     sample_count: reportSessions.length,
     top_skills: topSkills,
@@ -753,7 +1194,7 @@ export async function reportCommand(options?: {
       path: path.relative(storage.root, reportPath).replaceAll("\\", "/"),
       source_data_hash: sourceHash,
       real_data_only: options.realOnly ?? true,
-      metadata: { format: "json", period }
+      metadata: { format: "json", period, template }
     });
     storage.recordEvent("REPORT_GENERATED", path.relative(storage.root, reportPath).replaceAll("\\", "/"), sourceHash);
     return reportPath;
@@ -799,7 +1240,11 @@ ${fs.existsSync(progressImg) ? `![work-progress](${path.relative(reportDir, prog
 
 ${fs.existsSync(personaImg) ? `![persona-evolution](${path.relative(reportDir, personaImg).replaceAll("\\", "/")})` : ""}
 
-## 5) 说明
+## 5) ${templateCopy.mdHeading}
+
+${reportTemplateMarkdown(template, topDomains, topWorkflows)}
+
+## 6) 说明
 
 ${imageNotes.map((n) => `- ${n}`).join("\n")}
 `;
@@ -927,6 +1372,7 @@ ${imageNotes.map((n) => `- ${n}`).join("\n")}
     <p class="muted">Top Workflows：${db.user_profile.top_workflows.map(escapeHtml).join(", ") || "暂无"}</p>
     ${fs.existsSync(personaImg) ? `<img src="${path.relative(reportDir, personaImg).replaceAll("\\", "/")}" alt="persona evolution" />` : ""}
   </section>
+  ${reportTemplateHtml(template, topDomains, topWorkflows)}
   <section class="card">
     <h2>下一步建议</h2>
     <div class="step"><div class="dot">1</div><div><strong>继续采集真实工作流</strong><div class="muted">next: nms ingest --input input.json</div></div></div>
@@ -944,7 +1390,7 @@ ${imageNotes.map((n) => `- ${n}`).join("\n")}
       path: path.relative(storage.root, reportPath).replaceAll("\\", "/"),
       source_data_hash: sourceHash,
       real_data_only: options.realOnly ?? true,
-      metadata: { format: "html", period }
+      metadata: { format: "html", period, template }
     });
     storage.recordEvent("REPORT_GENERATED", path.relative(storage.root, reportPath).replaceAll("\\", "/"), sourceHash);
     return reportPath;
@@ -957,7 +1403,7 @@ ${imageNotes.map((n) => `- ${n}`).join("\n")}
     path: path.relative(storage.root, reportPath).replaceAll("\\", "/"),
     source_data_hash: sourceHash,
     real_data_only: options?.realOnly ?? true,
-    metadata: { format: "md", period }
+    metadata: { format: "md", period, template }
   });
   storage.recordEvent("REPORT_GENERATED", path.relative(storage.root, reportPath).replaceAll("\\", "/"), sourceHash);
   return reportPath;

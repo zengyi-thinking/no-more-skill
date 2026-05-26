@@ -1,19 +1,24 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import {
+  briefCommand,
   contextCommand,
+  dataStatusCommand,
   doctorCommand,
   flowCommand,
   flowVisualCommand,
+  guardCommand,
   ingestCommand,
   nightCommand,
+  profileReviewCommand,
   reportCommand,
-  replayCommand
+  replayCommand,
+  suggestCommand
 } from "./commands.js";
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.3.1");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.0");
 
 program
   .command("ingest")
@@ -60,6 +65,40 @@ program
   });
 
 program
+  .command("brief")
+  .description("generate a compact agent brief from .nms context")
+  .option("--task <text>", "task summary")
+  .option("--task-file <file>", "task text file")
+  .option("--format <type>", "markdown or json", "markdown")
+  .option("--profile <type>", "compact, full, or strict", "compact")
+  .action((opts) => {
+    const format = opts.format === "json" ? "json" : "markdown";
+    const profile = ["full", "strict"].includes(opts.profile) ? opts.profile : "compact";
+    process.stdout.write(`${briefCommand({ task: opts.task, taskFile: opts.taskFile, format, profile })}\n`);
+  });
+
+program
+  .command("suggest")
+  .description("suggest a workflow for a task from history/domain packs")
+  .option("--task <text>", "task summary")
+  .option("--task-file <file>", "task text file")
+  .option("--format <type>", "human or json", "human")
+  .action((opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    process.stdout.write(`${suggestCommand({ task: opts.task, taskFile: opts.taskFile, format })}\n`);
+  });
+
+program
+  .command("guard")
+  .description("check write policy for files before an agent edits")
+  .argument("[files...]", "files to check")
+  .option("--format <type>", "human or json", "human")
+  .action((files, opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    process.stdout.write(`${guardCommand(files, format)}\n`);
+  });
+
+program
   .command("replay")
   .description("replay the most common workflow")
   .action(() => {
@@ -72,14 +111,18 @@ program
   .option("--dry-run", "force dry run mode")
   .option("--apply", "enable write/apply mode explicitly")
   .option("--explain", "show gate decision chain")
+  .option("--task <text>", "auto-plan a dry-run task")
   .option("--task-file <file>", "planner JSON file path")
+  .option("--resume <id>", "resume/read a previous night-run artifact")
   .option("--time-budget <min>", "time budget in minutes", "5")
   .action((opts) => {
     const out = nightCommand({
       dryRun: Boolean(opts.dryRun),
       apply: Boolean(opts.apply),
       explain: Boolean(opts.explain),
+      task: opts.task,
       taskFile: opts.taskFile,
+      resume: opts.resume,
       timeBudget: Number(opts.timeBudget)
     });
     process.stdout.write(`${out}\n`);
@@ -90,6 +133,30 @@ program
   .description("read-only diagnostics for data and git safety")
   .action(() => {
     process.stdout.write(`${doctorCommand()}\n`);
+  });
+
+program
+  .command("data")
+  .description("inspect .nms behavior data")
+  .argument("[action]", "status", "status")
+  .option("--format <type>", "human or json", "human")
+  .action((action, opts) => {
+    if (action !== "status") {
+      process.stdout.write(`Unsupported data action: ${action}\n`);
+      return;
+    }
+    const format = opts.format === "json" ? "json" : "human";
+    process.stdout.write(`${dataStatusCommand(format)}\n`);
+  });
+
+program
+  .command("profile")
+  .description("review learned user profile claims")
+  .option("--review", "review profile claims", true)
+  .option("--format <type>", "human or json", "human")
+  .action((opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    process.stdout.write(`${profileReviewCommand(format)}\n`);
   });
 
 program
@@ -116,6 +183,7 @@ program
   .option("--model <name>", "image model, default gpt-image-2")
   .option("--format <type>", "md, html, or json", "md")
   .option("--period <range>", "report period, e.g. 1d or 7d", "7d")
+  .option("--template <name>", "daily, weekly, video, or portfolio", "weekly")
   .option("--real-only", "only use real .nms data", true)
   .action(async (opts) => {
     const format = ["html", "json"].includes(opts.format) ? opts.format : "md";
@@ -127,6 +195,7 @@ program
       model: opts.model,
       format,
       period: opts.period,
+      template: opts.template,
       realOnly: Boolean(opts.realOnly)
     });
     process.stdout.write(`Report generated: ${out}\n`);

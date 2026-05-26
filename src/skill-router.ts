@@ -1,12 +1,17 @@
 import {
+  briefCommand,
   contextCommand,
+  dataStatusCommand,
   doctorCommand,
   flowCommand,
   flowVisualCommand,
+  guardCommand,
   ingestCommand,
   nightCommand,
+  profileReviewCommand,
   reportCommand,
-  replayCommand
+  replayCommand,
+  suggestCommand
 } from "./commands.js";
 
 export interface SkillRouteInput {
@@ -43,15 +48,22 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
 
   const helpText = [
     "NMS Skill Commands:",
-    "- /nms [flow|ingest|replay|night|doctor|report] [flags]",
+    "- /nms [flow|ingest|replay|night|doctor|report|data|profile|brief|suggest|guard] [flags]",
     "- /nms-flow [--format human|json] [--visual]",
     "- /nms-context --task <task> [--format json]",
+    "- /nms-brief --task <task> [--profile strict]",
+    "- /nms-suggest --task <task>",
+    "- /nms-guard --files <file,file>",
     "- /nms-ingest --input <file>",
     "- /nms-replay",
+    "- /nms-night --dry-run --task <task> [--explain]",
     "- /nms-night --dry-run --task-file <task.json> [--explain]",
+    "- /nms-night --resume <id>",
     "- /nms-night --apply --task-file <task.json>",
     "- /nms-doctor",
-    "- /nms-report [--image]"
+    "- /nms-data status [--format json]",
+    "- /nms-profile --review [--format json]",
+    "- /nms-report [--template video|daily|weekly|portfolio] [--image]"
   ].join("\n");
 
   const canonical = (() => {
@@ -92,6 +104,26 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         format: (args.format as "human" | "json") ?? "human",
         includeEvidence: toBool(args["include-evidence"]) || toBool(args.includeEvidence)
       });
+    case "/nms-brief":
+      return briefCommand({
+        task: args.task as string | undefined,
+        taskFile: (args["task-file"] as string | undefined) ?? (args.taskFile as string | undefined),
+        format: (args.format as "markdown" | "json") ?? "markdown",
+        profile: (args.profile as "compact" | "full" | "strict") ?? "compact"
+      });
+    case "/nms-suggest":
+      return suggestCommand({
+        task: args.task as string | undefined,
+        taskFile: (args["task-file"] as string | undefined) ?? (args.taskFile as string | undefined),
+        format: (args.format as "human" | "json") ?? "human"
+      });
+    case "/nms-guard": {
+      const rawFiles = args.files ?? args.file ?? "";
+      const files = Array.isArray(rawFiles)
+        ? rawFiles.map(String)
+        : String(rawFiles).split(",").map((item) => item.trim()).filter(Boolean);
+      return guardCommand(files, (args.format as "human" | "json") ?? "human");
+    }
     case "/nms-replay":
       return replayCommand();
     case "/nms-night":
@@ -99,7 +131,9 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         dryRun: toBool(args["dry-run"]) || toBool(args.dryRun),
         apply: toBool(args.apply),
         explain: toBool(args.explain),
+        task: args.task as string | undefined,
         taskFile: (args["task-file"] as string | undefined) ?? (args.taskFile as string | undefined),
+        resume: args.resume as string | undefined,
         timeBudget: toNum(args["time-budget"] ?? args.timeBudget, 5)
       });
     case "/nms-report": {
@@ -111,6 +145,7 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
         model: args.model as string | undefined,
         format: (args.format as "md" | "html" | "json") ?? "md",
         period: args.period as string | undefined,
+        template: args.template as string | undefined,
         realOnly: args["real-only"] === undefined && args.realOnly === undefined
           ? true
           : toBool(args["real-only"]) || toBool(args.realOnly)
@@ -119,6 +154,10 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     }
     case "/nms-doctor":
       return doctorCommand();
+    case "/nms-data":
+      return dataStatusCommand((args.format as "human" | "json") ?? "human");
+    case "/nms-profile":
+      return profileReviewCommand((args.format as "human" | "json") ?? "human");
     default:
       return `Unsupported slash command: ${cmd}\n\n${helpText}`;
   }

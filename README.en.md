@@ -25,11 +25,16 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 
 - `nms ingest`: ingest compressed context and extract skills/workflows
 - `nms flow`: behavior cockpit (`--format human|json`)
+- `nms data status`: inspect `.nms` trust level, samples, artifacts, and domain coverage
+- `nms profile --review`: turn learned profile into evidence-backed claims for review
 - `nms context`: export agent-readable user behavior context
+- `nms brief`: generate a preflight agent brief with style, workflow, risks, and safety policy
+- `nms suggest`: recommend a task workflow from real history first, then domain packs
+- `nms guard`: preflight write paths and file kinds before an Agent edits
 - `nms replay`: replay the most common workflow
-- `nms night`: guarded night loop (default dry-run)
+- `nms night`: guarded night loop (default dry-run, with `--task` planning and `--resume` audit lookup)
 - `nms doctor`: read-only diagnostics
-- `nms report`: real-data report generation in Markdown/HTML/JSON (optional image rendering)
+- `nms report`: real-data reports with daily/weekly/video/portfolio templates (optional image rendering)
 
 ## Domain Packs
 
@@ -40,13 +45,13 @@ NMS reads `.nms/domains/*.json` as real behavior domain packs. Built-ins include
 - `research`: problem definition, source collection, cross-checking, source evaluation, synthesis
 - `learning`: learning goals, material selection, practice, feedback, review
 - `product`: requirements, user analysis, prototype design, copywriting, demos, launch
-- `content`: scripts, storyboards, pages, images, publishing, review
+- `content`: scripts, storyboards, pages, images, publishing, content review
 
 You can add your own pack such as `.nms/domains/fitness.json`. When compressed context contains those skills, `ingest` stores the detected domain and `flow --domain fitness` plus `report` use it in real stats.
 
 ## Local `.nms` Data Layer
 
-NMS v0.3 writes real behavior data under `.nms/`:
+NMS v0.4 writes real behavior data under `.nms/`:
 
 - `.nms/events/`: append-only event logs
 - `.nms/sessions/`: real behavior sessions split by year/month
@@ -75,24 +80,35 @@ If your host uses `/<skill>-<function>` style, use:
 - `/nms-ingest --input input.json`
 - `/nms-flow --format human`
 - `/nms-flow --visual`
+- `/nms-data status --format json`
+- `/nms-profile --review --format json`
 - `/nms-context --task "generate weekly project report" --format json`
+- `/nms-brief --task "generate weekly project report" --profile strict`
+- `/nms-suggest --task "generate weekly project report" --format json`
+- `/nms-guard --files sandbox/new/report.tsx`
 - `/nms-replay`
+- `/nms-night --dry-run --explain --task "generate weekly project report"`
 - `/nms-night --dry-run --explain --task-file task.json`
+- `/nms-night --resume night-`
 - `/nms-doctor`
-- `/nms-report --format html --real-only`
+- `/nms-report --format html --template video --real-only`
 - `/nms-report --image`
 
 GSD/Gemini style aliases:
 
 - `/nms:flow`
+- `/nms:brief`
+- `/nms:guard`
 - `/nms:night`
 - `/nms:report`
 
 Codex style aliases:
 
 - `$nms-flow`
+- `$nms-brief --task "generate weekly project report" --profile strict`
+- `$nms-guard --files sandbox/new/report.tsx`
 - `$nms-night --dry-run --task-file task.json`
-- `$nms-report --image`
+- `$nms-report --template video --image`
 
 > Note: when testing `$nms-*` in local PowerShell, quote the command token: `npm run dev:skill -- '$nms-flow' --format human`. In host command palettes, quoting is not required.
 
@@ -132,19 +148,28 @@ Run:
 npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- flow --format json
+npm run dev -- data status --format json
+npm run dev -- profile --review --format json
 npm run dev -- context --task "generate weekly project report" --format json
+npm run dev -- brief --task "generate weekly project report" --profile strict
+npm run dev -- suggest --task "generate weekly project report" --format json
+npm run dev -- guard sandbox/new/report.tsx --format json
 npm run dev -- flow --visual
 npm run dev -- replay
+npm run dev -- night --dry-run --explain --task "generate weekly project report"
 npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
+npm run dev -- night --resume night-
 npm run dev -- doctor
-npm run dev -- report --format html --real-only
+npm run dev -- report --format html --template weekly --real-only
 ```
 
 ## Output Experience
 
 - `nms flow --visual` creates `.nms/flow-dashboard.html` with domain mix, skill frequency, main workflow path, and workflow edges.
 - `nms context --format json` includes relevant domains, workflows, avoid-list, and safety policy for other Agents.
-- `nms report --format html --real-only` generates a product-style cockpit report with domain distribution, skill usage, workflow graph, user style, and next commands.
+- `nms brief / suggest / guard` gives Agents a preflight brief, a workflow suggestion, and a hard write-scope check before editing.
+- `nms report --format html --template video --real-only` generates a product-style cockpit report or a presentation script from real `.nms` data.
+- `nms night --dry-run --task "<task>" --explain` auto-plans only in dry-run mode; production apply still requires an explicit reviewed task file.
 
 ## Safety Boundaries
 

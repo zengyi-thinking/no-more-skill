@@ -24,11 +24,16 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 
 - `nms ingest`: 注入压缩上下文，提取 skill/workflow 并更新用户画像
 - `nms flow`: 专业行为驾驶舱（支持 `--format human|json`）
+- `nms data status`: 检查 `.nms` 数据可信度、样本量、artifact 和领域覆盖
+- `nms profile --review`: 把用户画像拆成“可审查的证据声明”，避免 Agent 过度脑补
 - `nms context`: 导出 Agent 可直接使用的用户习惯上下文
+- `nms brief`: 给 Agent 的任务前简报，压缩用户风格、workflow、风险和安全规则
+- `nms suggest`: 根据真实历史和 domain pack 推荐任务 workflow
+- `nms guard`: 写文件前做路径与文件类型预检
 - `nms replay`: 复现最常用 workflow
-- `nms night`: 受控夜间执行（默认 dry-run，`--explain` 可解释判定链）
+- `nms night`: 受控夜间执行（默认 dry-run，支持 `--task` 自动规划、`--resume` 读取审计记录）
 - `nms doctor`: 只读健康诊断（数据完整性、schema、git 安全状态）
-- `nms report`: 生成真实使用周报（支持 Markdown/HTML/JSON，可选出图）
+- `nms report`: 生成真实使用报告（支持 daily/weekly/video/portfolio 模板，可选出图）
 
 ## 领域扩展：不只 Coding
 
@@ -39,13 +44,13 @@ NMS 会读取 `.nms/domains/*.json` 作为真实领域包。默认内置：
 - `research`：问题定义、资料收集、交叉验证、来源评估、结论归纳
 - `learning`：学习目标、资料选择、练习、反馈、学习复盘
 - `product`：需求分析、用户分析、原型设计、文案设计、演示、推广
-- `content`：口播、分镜、页面、图片、发布、复盘
+- `content`：口播、分镜、页面、图片、发布、内容复盘
 
 你可以新增自己的领域包，例如 `.nms/domains/fitness.json`。只要压缩上下文里出现对应 skill，`ingest` 就会把它识别为真实领域数据，`flow --domain fitness` 和 `report` 会自动纳入统计。
 
 ## `.nms` 本地数据层
 
-NMS v0.3 会在本地 `.nms/` 下保存真实行为数据：
+NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 
 - `.nms/events/`：压缩上下文、报告、night run 等事件日志
 - `.nms/sessions/`：按年月拆分的真实会话行为记录
@@ -74,17 +79,26 @@ NMS v0.3 会在本地 `.nms/` 下保存真实行为数据：
 - `/nms-ingest --input input.json`
 - `/nms-flow --format human`
 - `/nms-flow --visual`
+- `/nms-data status --format json`
+- `/nms-profile --review --format json`
 - `/nms-context --task "生成一份项目周报" --format json`
+- `/nms-brief --task "生成一份项目周报" --profile strict`
+- `/nms-suggest --task "生成一份项目周报" --format json`
+- `/nms-guard --files sandbox/new/report.tsx`
 - `/nms-replay`
+- `/nms-night --dry-run --explain --task "生成一份项目周报"`
 - `/nms-night --dry-run --explain --task-file task.json`
+- `/nms-night --resume night-`
 - `/nms-doctor`
-- `/nms-report --format html --real-only`
+- `/nms-report --format html --template video --real-only`
 - `/nms-report --image`
 
 如果你的宿主环境偏好 GSD 风格 `/<skill>:<function>`，也同样支持：
 
 - `/nms:ingest`
 - `/nms:flow`
+- `/nms:brief`
+- `/nms:guard`
 - `/nms:replay`
 - `/nms:night`
 - `/nms:doctor`
@@ -92,8 +106,10 @@ NMS v0.3 会在本地 `.nms/` 下保存真实行为数据：
 如果你的宿主环境是 Codex 风格 `$<skill>-<function>`，也支持：
 
 - `$nms-flow`
+- `$nms-brief --task "生成一份项目周报" --profile strict`
+- `$nms-guard --files sandbox/new/report.tsx`
 - `$nms-night --dry-run --task-file task.json`
-- `$nms-report --image`
+- `$nms-report --template video --image`
 
 > 注意：在本地 PowerShell 终端里测试 `$nms-*` 时，需要加引号，例：`npm run dev:skill -- '$nms-flow' --format human`。在 Claude/Codex 宿主输入框里不需要引号。
 
@@ -141,12 +157,19 @@ npm run build
 npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- flow --format json
+npm run dev -- data status --format json
+npm run dev -- profile --review --format json
 npm run dev -- context --task "帮我生成本周项目报告" --format json
+npm run dev -- brief --task "帮我生成本周项目报告" --profile strict
+npm run dev -- suggest --task "帮我生成本周项目报告" --format json
+npm run dev -- guard sandbox/new/report.tsx --format json
 npm run dev -- flow --visual
 npm run dev -- replay
+npm run dev -- night --dry-run --explain --task "帮我生成本周项目报告"
 npm run dev -- night --dry-run --explain --task-file task.json --time-budget 1
+npm run dev -- night --resume night-
 npm run dev -- doctor
-npm run dev -- report --format html --real-only
+npm run dev -- report --format html --template weekly --real-only
 ```
 
 ## 输出长什么样
@@ -168,9 +191,15 @@ npm run dev -- report --format html --real-only
 - 输出 relevant domains，便于 Agent 判断当前任务更像 coding、writing、research 还是其他领域
 - 适合 Agent 在执行任务前读取，而不是直接解析 `.nms` 内部文件
 
-`nms report --format html --real-only`：
+`nms brief / suggest / guard`：
+- `brief` 给 Agent 一份任务前简报，明确样本量、置信度、用户风格和硬性安全规则
+- `suggest` 用真实历史优先，其次才用领域模板，给出 `why + next commands`
+- `guard` 在写文件前检查路径白名单和 UI/new/test 文件类型，越权直接阻断
+
+`nms report --format html --template video --real-only`：
 - 默认生成 `.nms/artifacts/reports/latest/report.md` 或 `report.html`
 - HTML 报告包含领域分布、skill 频率、主 workflow 路径、workflow 边、用户风格和下一步命令
+- `--template daily|weekly|video|portfolio` 可以分别生成日报、周报、视频讲解稿、作品集证据板
 
 `nms report --image`：
 - 调用你配置的中转站（默认模型 `gpt-image-2`）输出三张图：
@@ -191,6 +220,8 @@ NMS_IMAGE_MODEL="gpt-image-2"
 - 状态流转日志（含耗时与决策）
 - Gate 判定链
 - 失败分级（`CONFIG_ERROR / POLICY_BLOCK / TEST_FAIL / REVIEW_FAIL / TIMEOUT`）
+- `--task "<任务>"` 只允许 dry-run 自动规划；生产 apply 必须使用人工审查过的 `--task-file`
+- `--resume <id>` 读取 `.nms/artifacts/night-runs/` 中的历史审计记录和恢复建议
 
 `task.json` 示例（真实任务输入）：
 ```json

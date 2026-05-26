@@ -8,8 +8,17 @@ Reports must be based on real `.nms` data.
 nms report --period 1d --format html --real-only
 nms report --period 7d --format md
 nms report --period 30d --format json
+nms report --period 7d --format html --template video --real-only
+nms report --period 7d --format html --template portfolio --real-only
 nms report --period 7d --format html --image
 ```
+
+## Templates
+
+- `daily`: short operating brief for recent work.
+- `weekly`: default behavior cockpit for recurring review.
+- `video`: presentation script with opening, evidence path, demo flow, and closing line.
+- `portfolio`: evidence board for showing capabilities, workflow, artifacts, and safety boundaries.
 
 ## Required Sections
 

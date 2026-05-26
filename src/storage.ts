@@ -469,7 +469,7 @@ export class JsonStorage {
         default_apply: false,
         requires_explicit_apply: true,
         allowed_write_roots: DEFAULT_CONFIG.harness.allowed_roots,
-        policy_profile: "normal",
+        policy_profile: "strict",
         blocked_patterns: [".env", "secret", "token", "password", "private"]
       },
       data_quality: {

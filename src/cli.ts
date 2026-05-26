@@ -15,6 +15,7 @@ import {
   ingestGuideCommand,
   ingestCommand,
   ingestWatchCommand,
+  ingestWatchLoopCommand,
   hookIngestFileCommand,
   nightCommand,
   onboardingCommand,
@@ -37,9 +38,10 @@ program
   .description("ingest compressed context payload from file or stdin")
   .option("-i, --input <file>", "input JSON file path")
   .option("--watch <dir>", "consume real hook payloads from a directory such as .nms/inbox")
-  .action((opts) => {
+  .action(async (opts) => {
     if (opts.watch) {
-      process.stdout.write(`${ingestWatchCommand(opts.watch)}\n`);
+      const out = await ingestWatchLoopCommand(opts.watch);
+      process.stdout.write(`${out}\n`);
       return;
     }
     if (!opts.input && process.stdin.isTTY) {

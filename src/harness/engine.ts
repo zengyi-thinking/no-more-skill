@@ -341,7 +341,7 @@ export function runNightHarness(opts: NightOptions): NightReport {
           explain_chain: opts.explain ? explainChain : undefined
         };
       }
-      if (currentBranch(cwd) === "main") {
+      if (["main", "master"].includes(currentBranch(cwd))) {
         policyLogs.push({ name: "main_branch_guard", status: "block", reason: "main branch commit forbidden" });
         return {
           dry_run: false,

@@ -251,6 +251,67 @@ export function ingestWatchCommand(watchDir?: string): string {
   return JSON.stringify(summary, null, 2);
 }
 
+export async function ingestWatchLoopCommand(watchDir?: string, pollIntervalMs = 2000): Promise<string> {
+  const storage = new JsonStorage();
+  const dir = path.resolve(watchDir ?? path.join(storage.root, "inbox"));
+  fs.mkdirSync(dir, { recursive: true });
+  const processed = new Set<string>();
+  const summary: HookConsumeSummary = {
+    generated_at: new Date().toISOString(),
+    watched_dir: dir,
+    processed: 0,
+    ingested: 0,
+    duplicates: 0,
+    failed: 0,
+    archived: [],
+    failed_records: []
+  };
+  const scan = () => {
+    const files = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => path.join(dir, entry.name))
+      .sort();
+    for (const file of files) {
+      const key = path.basename(file);
+      if (processed.has(key)) continue;
+      processed.add(key);
+      const result = processHookFile(file, storage, true);
+      summary.processed += 1;
+      if (result.status === "ingested") summary.ingested += 1;
+      if (result.status === "duplicate") summary.duplicates += 1;
+      if (result.status === "failed") summary.failed += 1;
+      if (result.archivePath) summary.archived.push(result.archivePath);
+      if (result.errorPath) summary.failed_records.push(result.errorPath);
+      process.stdout.write(`${JSON.stringify({ file: key, status: result.status, summary: result.summary })}\n`);
+    }
+  };
+  process.stdout.write(`Watching ${dir} for real hook payloads. Press Ctrl+C to stop.\n`);
+  scan();
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      clearInterval(timer);
+      process.removeListener("SIGINT", stop);
+      process.removeListener("SIGTERM", stop);
+      resolve();
+    };
+    const timer = setInterval(scan, pollIntervalMs);
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  recordCommandAudit(storage, {
+    command: "ingest-watch-loop",
+    triggeredBy: "local-cli",
+    policyProfile: "normal",
+    inputSummary: `watch ${dir}`,
+    fileScope: [],
+    gateResult: summary.failed > 0 ? "PARTIAL" : "OK",
+    artifactPaths: [...summary.archived.map((file) => relativeToNmsRoot(storage, file)), ...summary.failed_records.map((file) => relativeToNmsRoot(storage, file))],
+    notes: [`processed=${summary.processed}`, `ingested=${summary.ingested}`, `duplicates=${summary.duplicates}`, `failed=${summary.failed}`]
+  });
+  return JSON.stringify(summary, null, 2);
+}
+
 export function onboardingCommand(format: "human" | "json" = "human"): string {
   const data = JSON.parse(dataStatusCommand("json")) as {
     sample_count: number;
@@ -1677,7 +1738,6 @@ export function autoCommand(format: "human" | "json" = "human"): string {
   };
 
   const autoArtifactPath = path.join(storage.root, "artifacts", "auto", `auto-${Date.now()}.json`);
-  writeJsonArtifact(autoArtifactPath, payload);
   storage.recordArtifact({
     type: "context",
     path: relativeToNmsRoot(storage, autoArtifactPath),

@@ -392,6 +392,7 @@ describe.sequential("NMS v0.2 optimization", () => {
       const out = JSON.parse(contextCommand({ task: "生成项目周报", format: "json" }));
       expect(out.user_style.avoid).toContain("demo 数据");
       expect(out.safety_policy.requires_explicit_apply).toBe(true);
+      expect(out.safety_policy.policy_profile).toBe("strict");
       expect(out.data_quality.sample_count).toBe(1);
       expect(out.relevant_domains[0].name).toBe("coding");
       expect(fs.existsSync(path.join(process.cwd(), ".nms", "artifacts", "artifacts.json"))).toBe(true);
@@ -757,6 +758,34 @@ describe.sequential("NMS v0.2 optimization", () => {
       expect(out.policy_logs.some((log: { name: string }) => log.name === "isolated_worktree_guard")).toBe(true);
     });
   }, 15000);
+
+  test("night apply is blocked on protected master branch", () => {
+    withTempCwd(() => {
+      execSync("git init", { stdio: "pipe" });
+      execSync("git config user.email test@example.com", { stdio: "pipe" });
+      execSync("git config user.name Tester", { stdio: "pipe" });
+      fs.writeFileSync("README.md", "seed", "utf8");
+      execSync("git add README.md && git commit -m seed", { stdio: "pipe" });
+      fs.mkdirSync("sandbox/new", { recursive: true });
+      fs.writeFileSync("sandbox/new/widget.tsx", "export const widget = true;\n", "utf8");
+      fs.writeFileSync("sandbox/new/widget.test.ts", "export const test = true;\n", "utf8");
+      const taskFile = path.join(process.cwd(), "task.json");
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          task: "protected master apply",
+          files: ["sandbox/new/widget.tsx", "sandbox/new/widget.test.ts"],
+          constraints: ["ui/new/tests only"],
+          test_plan: ["node -e \"process.exit(0)\""]
+        }),
+        "utf8"
+      );
+
+      const out = JSON.parse(nightCommand({ apply: true, timeBudget: 1, explain: true, taskFile }));
+      expect(out.final_state).toBe("ROLLBACK");
+      expect(out.failure.failure_reason).toBe("Main branch commit forbidden");
+    });
+  });
 
   test("flow visual generates html dashboard file", () => {
     withTempCwd(() => {

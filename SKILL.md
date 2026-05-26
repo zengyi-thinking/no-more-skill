@@ -16,6 +16,7 @@ NMS records real user behavior into `.nms`, derives workflow/profile snapshots, 
 - `npm run dev -- flow`
 - `npm run dev -- report`
 - `npm run dev -- auto`
+- `npm run dev -- birthday`
 - `npm run dev -- ingest --input <file>`
 - `npm run dev:skill -- /nms-flow`
 
@@ -24,13 +25,14 @@ Slash routes:
 - `/nms-flow`
 - `/nms-report`
 - `/nms-auto`
+- `/nms-birthday`
 
-Internal Agent steps are intentionally hidden from user-facing help. Agents should use `/nms-auto` for the complete guarded workflow and consult `skills/nms-core/references/AGENT_PROTOCOL.md` only when they need low-level automation.
+Internal Agent steps are intentionally hidden from user-facing help. Agents should use `/nms-auto` for the complete guarded workflow. `/nms-birthday` writes a living memory capsule that future `/nms-auto` runs can inherit.
 
 Runtime aliases:
 
-- GSD/Gemini: `/nms:flow`, `/nms:report`, `/nms:auto`
-- Codex: `$nms-flow`, `$nms-report`, `$nms-auto`
+- GSD/Gemini: `/nms:flow`, `/nms:report`, `/nms:auto`, `/nms:birthday`
+- Codex: `$nms-flow`, `$nms-report`, `$nms-auto`, `$nms-birthday`
 
 Install:
 

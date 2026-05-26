@@ -22,13 +22,14 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 
 ## 用户主入口
 
-普通用户只需要记住三个命令：
+普通用户只需要记住四个命令：
 
 - `/nms-flow`：看趋势。展示最近 workflow、skill 频率、用户风格和数据健康度。
 - `/nms-report`：出报告。生成真实 `.nms` 数据驱动的 HTML 可视化报告。
 - `/nms-auto`：安全自动推进。读取 `.nms` 习惯，先模拟用户 workflow，再走 dry-run Gate。
+- `/nms-birthday`：生成“生日记忆胶囊”，把年度目标、边界和进化信号写成后续 Agent 可继承的资产。
 
-下一步会新增 `/nms-birthday`，用于生日/年度人格进化报告。它会在实现完成后再进入主入口，避免提前暴露空功能。
+`/nms-birthday` 不是一次性总结页，它会写入 `.nms/derived/birthday/latest.json`，后续 `/nms-auto` 会通过 Agent Context 自动继承这份 North Star 和下一阶段目标。
 
 ## Agent 工作流
 
@@ -84,6 +85,7 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 - `/nms-flow`
 - `/nms-report`
 - `/nms-auto`
+- `/nms-birthday`
 
 这三个命令会自动调用内部能力。比如 `/nms-auto` 会透明使用 brief、suggest、guard 和 night gate；用户不需要记住这些内部步骤。
 
@@ -92,12 +94,14 @@ NMS v0.4 会在本地 `.nms/` 下保存真实行为数据：
 - `/nms:flow`
 - `/nms:report`
 - `/nms:auto`
+- `/nms:birthday`
 
 如果你的宿主环境是 Codex 风格 `$<skill>-<function>`，也支持：
 
 - `$nms-flow`
 - `$nms-report`
 - `$nms-auto`
+- `$nms-birthday`
 
 > 注意：在本地 PowerShell 终端里测试 `$nms-*` 时，需要加引号，例：`npm run dev:skill -- '$nms-flow'`。在 Claude/Codex 宿主输入框里不需要引号。
 
@@ -146,6 +150,7 @@ npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- report
 npm run dev -- auto
+npm run dev -- birthday
 ```
 
 ## 输出长什么样
@@ -167,6 +172,11 @@ npm run dev -- auto
 - 默认 dry-run，不会直接写仓库
 - 内部读取行为记忆、推断 workflow、检查写入边界，再进入 dry-run Gate
 - 只输出用户需要看的摘要、Gate 结果和下一步建议，不暴露内部命令细节
+
+`nms birthday`：
+- 生成 `.nms/derived/birthday/latest.json` 作为可继承记忆胶囊
+- 生成 `.nms/artifacts/birthday/latest/birthday.html` 作为生日/年度进化页面
+- 后续 `nms context` 和 `/nms-auto` 会读取 `birthday_memory`
 
 Agent 内部能力仍然存在，但默认被 `/nms-auto` 接管，不需要普通用户主动记忆。
 

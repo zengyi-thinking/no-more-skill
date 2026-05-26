@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import type {
   AgentContext,
   ArtifactRecord,
+  BirthdayCapsule,
   Database,
   NmsEvent,
   SessionRecord,
@@ -322,6 +323,24 @@ export class JsonStorage {
     return filePath;
   }
 
+  private readLatestBirthdayMemory(): AgentContext["birthday_memory"] | undefined {
+    const capsulePath = path.join(this.root, "derived", "birthday", "latest.json");
+    if (!fs.existsSync(capsulePath)) return undefined;
+    try {
+      const capsule = JSON.parse(fs.readFileSync(capsulePath, "utf8")) as BirthdayCapsule;
+      return {
+        latest_capsule_ref: relativeToRoot(this.root, capsulePath),
+        generated_at: capsule.generated_at,
+        north_star: capsule.north_star,
+        retained_commitments: capsule.retained_commitments,
+        next_year_targets: capsule.next_year_targets,
+        risks_to_watch: capsule.risks_to_watch
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   buildAgentContext(taskSummary = ""): AgentContext {
     const db = this.load();
     const topWorkflowEntries = Object.entries(db.stats.workflow_counts).sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -332,7 +351,7 @@ export class JsonStorage {
     if (db.sessions.length === 0) warnings.push("真实样本不足时不得编造用户偏好或 workflow。");
     if (db.stats.quality_metrics.stale_risk >= 60) warnings.push("部分技能陈旧，执行前优先参考最近任务。");
 
-    return {
+    const context: AgentContext = {
       schema_version: 1,
       generated_at: new Date().toISOString(),
       project_id: this.projectId(),
@@ -373,6 +392,9 @@ export class JsonStorage {
         warnings
       }
     };
+    const birthdayMemory = this.readLatestBirthdayMemory();
+    if (birthdayMemory) context.birthday_memory = birthdayMemory;
+    return context;
   }
 
   private ensureV3Layout(): void {

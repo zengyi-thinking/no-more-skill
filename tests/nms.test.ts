@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import {
   autoCommand,
+  birthdayCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -479,6 +480,38 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
+  test("birthday command creates living memory capsule consumed by context and auto", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const payload = {
+          compressed_text: "PRD分析 UI生成 代码生成",
+          conversation: "先 PRD分析，再 UI生成，最后 代码生成，需要结构化验证",
+          tool: "codex"
+        };
+        const inputFile = path.join(process.cwd(), "input.json");
+        fs.writeFileSync(inputFile, JSON.stringify(payload), "utf8");
+        ingestCommand(inputFile);
+
+        const out = JSON.parse(await birthdayCommand({ format: "json" }));
+        expect(out.capsule.north_star).toContain("真实工作方式");
+        expect(fs.existsSync(path.join(process.cwd(), ".nms", "derived", "birthday", "latest.json"))).toBe(true);
+        expect(fs.existsSync(out.paths.html)).toBe(true);
+        expect(fs.existsSync(out.paths.markdown)).toBe(true);
+
+        const context = JSON.parse(contextCommand({ format: "json" }));
+        expect(context.birthday_memory.north_star).toBe(out.capsule.north_star);
+
+        const auto = JSON.parse(autoCommand("json"));
+        expect(auto.birthday_memory.north_star).toBe(out.capsule.north_star);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
   test("v3 sessions can rebuild compatibility data when data.json is missing", () => {
     withTempCwd(() => {
       const payload = {
@@ -702,6 +735,7 @@ describe.sequential("NMS v0.2 optimization", () => {
       expect(helpUnified).toContain("- /nms-flow");
       expect(helpUnified).toContain("- /nms-report");
       expect(helpUnified).toContain("- /nms-auto");
+      expect(helpUnified).toContain("- /nms-birthday");
       expect(helpUnified).toContain("Internal Agent workflow steps are hidden");
       expect(helpUnified).not.toContain("/nms-night");
       expect(helpUnified).not.toContain("/nms-brief");
@@ -717,6 +751,7 @@ describe.sequential("NMS v0.2 optimization", () => {
     expect(help).toContain("flow");
     expect(help).toContain("report");
     expect(help).toContain("auto");
+    expect(help).toContain("birthday");
     expect(help).not.toMatch(/\n\s+night\b/);
     expect(help).not.toMatch(/\n\s+brief\b/);
     expect(help).not.toMatch(/\n\s+guard\b/);
@@ -731,6 +766,7 @@ describe.sequential("NMS v0.2 optimization", () => {
         const routes = [
           ["/nms-flow", "Behavior Cockpit"],
           ["/nms-auto", "NMS Auto"],
+          ["/nms-birthday", "NMS Birthday"],
           ["/nms-data", "NMS Data Status"],
           ["/nms-profile", "NMS Profile Review"],
           ["/nms-context", "NMS Agent Context"],

@@ -18,6 +18,7 @@ Use the output to determine:
 - Things to avoid.
 - Safety policy.
 - Data confidence.
+- Birthday memory, if present.
 
 If `data_quality.sample_count` is low, do not infer strong preferences. Say that the profile is still learning.
 
@@ -27,15 +28,17 @@ If `data_quality.sample_count` is low, do not infer strong preferences. Say that
 2. Call `nms brief` before user-specific work.
 3. Call `nms suggest` when you need a workflow recommendation.
 4. Read `user_style`, `relevant_workflows`, and `safety_policy` from `nms context` when machine-readable context is needed.
-5. Before writing files, call `nms guard`; it checks pending Git files by default. Treat `ok=false` as a hard stop.
-6. Execute the task within policy and run validation when code or files are changed.
-7. If the interaction should become training data, ask the host to call `nms ingest` with a real compressed event.
+5. If `birthday_memory` exists, treat its `north_star` and `next_year_targets` as long-term guidance, not hard requirements.
+6. Before writing files, call `nms guard`; it checks pending Git files by default. Treat `ok=false` as a hard stop.
+7. Execute the task within policy and run validation when code or files are changed.
+8. If the interaction should become training data, ask the host to call `nms ingest` with a real compressed event.
 
 ## User-Facing Slash Routes
 
 - `/nms-flow`
 - `/nms-report`
 - `/nms-auto`
+- `/nms-birthday`
 
 ## Internal Slash Routes
 
@@ -57,3 +60,4 @@ If `data_quality.sample_count` is low, do not infer strong preferences. Say that
 - Do not expose raw conversation text by default.
 - Treat `safety_policy.requires_explicit_apply=true` as a hard boundary.
 - Treat default `nms auto` and `nms night` as dry-run-only. Apply mode requires an explicit reviewed task file.
+- Treat `/nms-birthday` as an evolvable memory asset, but never let it override safety or real-data constraints.

@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import {
   autoCommand,
+  birthdayCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -21,7 +22,7 @@ import {
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.3");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.4");
 
 program
   .command("ingest", { hidden: true })
@@ -102,6 +103,28 @@ program
   .action((opts) => {
     const format = opts.format === "json" ? "json" : "human";
     process.stdout.write(`${autoCommand(format)}\n`);
+  });
+
+program
+  .command("birthday")
+  .description("generate a living birthday memory capsule and report")
+  .option("--format <type>", "human or json", "human")
+  .option("--image", "generate a birthday poster via relay url/apikey")
+  .option("--output-dir <dir>", "birthday report output directory")
+  .option("--base-url <url>", "image relay endpoint url")
+  .option("--api-key <key>", "image relay API key")
+  .option("--model <name>", "image model, default gpt-image-2")
+  .action(async (opts) => {
+    const format = opts.format === "json" ? "json" : "human";
+    const out = await birthdayCommand({
+      format,
+      image: Boolean(opts.image),
+      outputDir: opts.outputDir,
+      baseUrl: opts.baseUrl,
+      apiKey: opts.apiKey,
+      model: opts.model
+    });
+    process.stdout.write(`${out}\n`);
   });
 
 program

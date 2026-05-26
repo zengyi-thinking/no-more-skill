@@ -124,6 +124,43 @@ export interface ArtifactRecord {
   metadata: Record<string, unknown>;
 }
 
+export interface BirthdayMemory {
+  latest_capsule_ref: string;
+  generated_at: string;
+  north_star: string;
+  retained_commitments: string[];
+  next_year_targets: string[];
+  risks_to_watch: string[];
+}
+
+export interface BirthdayCapsule {
+  schema_version: 1;
+  generated_at: string;
+  project_id: string;
+  period_days: number;
+  sample_count: number;
+  previous_sample_count: number;
+  north_star: string;
+  retained_commitments: string[];
+  stable_workflows: string[];
+  emerging_skills: string[];
+  changed_habits: string[];
+  growth_vectors: Array<{
+    name: string;
+    signal: string;
+    evidence: string[];
+  }>;
+  risks_to_watch: string[];
+  next_year_targets: string[];
+  agent_instructions: string[];
+  artifacts: {
+    capsule_ref: string;
+    html_report_ref: string;
+    markdown_ref: string;
+    poster_ref?: string;
+  };
+}
+
 export interface AgentContext {
   schema_version: number;
   generated_at: string;
@@ -157,6 +194,7 @@ export interface AgentContext {
     confidence: number;
     warnings: string[];
   };
+  birthday_memory?: BirthdayMemory;
 }
 
 export interface NmsConfig {

@@ -10,7 +10,7 @@ import { processCompressedEvent } from "./hook/engine.js";
 import { detectDomainFromText, detectSessionDomain, domainPackFor } from "./hook/domainPacks.js";
 import { JsonStorage } from "./storage.js";
 import { State } from "./types.js";
-import type { AgentContext, HookInput, NightReport, PlannerOutput, SessionRecord, Stats } from "./types.js";
+import type { AgentContext, BirthdayCapsule, HookInput, NightReport, PlannerOutput, SessionRecord, Stats } from "./types.js";
 
 const InputSchema = z.object({
   compressed_text: z.string(),
@@ -147,6 +147,19 @@ function reportQualityMetrics(
     stale_risk: recentCount === 0 ? 100 : 0,
     streak_days: daySet.size
   };
+}
+
+function topEntries(record: Record<string, number>, limit: number): Array<[string, number]> {
+  return Object.entries(record).sort((a, b) => b[1] - a[1]).slice(0, limit);
+}
+
+function sessionsWithinDays(sessions: SessionRecord[], days: number, offsetDays = 0): SessionRecord[] {
+  const end = Date.now() - offsetDays * 24 * 60 * 60 * 1000;
+  const start = end - days * 24 * 60 * 60 * 1000;
+  return sessions.filter((session) => {
+    const t = new Date(session.created_at).getTime();
+    return t >= start && t < end;
+  });
 }
 
 function bar(value: number, max = 100, width = 24): string {
@@ -434,6 +447,13 @@ export function contextCommand(options?: {
     ...(context.relevant_domains.length > 0
       ? context.relevant_domains.map((domain, index) => `${index + 1}. ${domain.name} (${domain.count}, ${domain.confidence})`)
       : ["(no stable domain yet)"]),
+    "Birthday Memory:",
+    ...(context.birthday_memory
+      ? [
+          `North Star: ${context.birthday_memory.north_star}`,
+          `Targets: ${context.birthday_memory.next_year_targets.join(", ") || "(none)"}`
+        ]
+      : ["(none yet)"]),
     "Warnings:",
     ...(context.data_quality.warnings.length > 0 ? context.data_quality.warnings : ["(none)"])
   ].join("\n");
@@ -764,6 +784,7 @@ export function autoCommand(format: "human" | "json" = "human"): string {
     ? suggestion.suggested_workflow
     : context.relevant_workflows[0]?.steps ?? [];
   const workflowText = workflow.length > 0 ? workflow.join(" -> ") : "(no stable workflow yet)";
+  const birthdayMemory = context.birthday_memory;
   const nextStep = decision === "READY_FOR_REVIEW"
     ? "Review the generated dry-run plan. Use an explicit reviewed task-file before any apply."
     : decision === "BLOCKED_BY_POLICY"
@@ -773,7 +794,9 @@ export function autoCommand(format: "human" | "json" = "human"): string {
     {
       stage: "READ_BEHAVIOR_MEMORY",
       status: "done",
-      summary: `${context.data_quality.sample_count} real sample(s), confidence ${context.data_quality.confidence}.`
+      summary: birthdayMemory
+        ? `${context.data_quality.sample_count} real sample(s), confidence ${context.data_quality.confidence}; birthday north star=${birthdayMemory.north_star}.`
+        : `${context.data_quality.sample_count} real sample(s), confidence ${context.data_quality.confidence}.`
     },
     {
       stage: "BUILD_USER_BRIEF",
@@ -815,6 +838,7 @@ export function autoCommand(format: "human" | "json" = "human"): string {
       workflow_preference: brief.user_style.workflow,
       avoid: brief.user_style.avoid
     },
+    birthday_memory: birthdayMemory ?? null,
     selected_workflow: {
       domain: suggestion.detected_domain,
       confidence: suggestion.domain_confidence,
@@ -857,6 +881,7 @@ export function autoCommand(format: "human" | "json" = "human"): string {
     `Samples: ${payload.data_quality.sample_count}`,
     `Behavior Score: ${payload.data_quality.behavior_score}`,
     `Workflow Confidence: ${payload.data_quality.workflow_confidence}`,
+    ...(birthdayMemory ? [`Birthday North Star: ${birthdayMemory.north_star}`] : []),
     `Selected Workflow: ${workflowText}`,
     "== Agent Workflow ==",
     ...agentWorkflow.map((step, index) => `${index + 1}. ${step.stage}: ${step.status}\n   ${step.summary}`),
@@ -1639,4 +1664,340 @@ ${imageNotes.map((n) => `- ${n}`).join("\n")}
   });
   storage.recordEvent("REPORT_GENERATED", path.relative(storage.root, reportPath).replaceAll("\\", "/"), sourceHash);
   return reportPath;
+}
+
+export async function birthdayCommand(options?: {
+  image?: boolean;
+  outputDir?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  format?: "human" | "json";
+  periodDays?: number;
+}): Promise<string> {
+  const storage = new JsonStorage();
+  const db = storage.load();
+  const packs = storage.loadDomainPacks();
+  const generatedAt = new Date().toISOString();
+  const stamp = generatedAt.replace(/[:.]/g, "-");
+  const periodDays = options?.periodDays ?? 365;
+  const sessionsWithDomains = db.sessions.map((session) => ({
+    ...session,
+    domain: detectSessionDomain(session, packs)
+  }));
+  const currentSessions = sessionsWithinDays(sessionsWithDomains, periodDays);
+  const previousSessions = sessionsWithinDays(sessionsWithDomains, periodDays, periodDays);
+  const currentCounts = sessionCounts(currentSessions);
+  const previousCounts = sessionCounts(previousSessions);
+  const currentQuality = reportQualityMetrics(currentSessions, currentCounts.workflowCounts);
+  const previousQuality = reportQualityMetrics(previousSessions, previousCounts.workflowCounts);
+  const topSkills = topEntries(currentCounts.skillCounts, 8);
+  const previousSkillNames = new Set(Object.keys(previousCounts.skillCounts));
+  const emergingSkills = topSkills
+    .filter(([name, count]) => !previousSkillNames.has(name) || count > (previousCounts.skillCounts[name] ?? 0))
+    .slice(0, 5)
+    .map(([name]) => name);
+  const stableWorkflows = topEntries(currentCounts.workflowCounts, 5).map(([name]) => name);
+  const topDomains = topEntries(currentCounts.domainCounts, 4);
+  const topDomain = topDomains[0]?.[0];
+  const topWorkflow = stableWorkflows[0];
+  const northStar = topDomain
+    ? `把 ${topDomain} 里的真实工作方式继续沉淀成 Agent 可执行资产。`
+    : "先积累真实行为样本，让 Agent 学会你的工作方式，而不是靠猜。";
+  const changedHabits = currentSessions.length === 0
+    ? ["样本不足：暂不判断习惯变化。"]
+    : [
+        currentQuality.workflow_confidence >= previousQuality.workflow_confidence
+          ? "主 workflow 稳定度正在保持或提升。"
+          : "主 workflow 稳定度下降，下一阶段需要减少任务切换。",
+        emergingSkills.length > 0
+          ? `出现新的高频能力信号：${emergingSkills.join(", ")}。`
+          : "暂无新的高频能力信号，继续采集真实使用数据。"
+      ];
+  const retainedCommitments = [
+    "只使用真实 .nms 数据，不编造技能频率、workflow 或人格结论。",
+    "继续默认 dry-run + Gate，不跳过测试和审查。",
+    topWorkflow ? `保留主 workflow：${topWorkflow}` : "先采集真实 workflow，再做强判断。"
+  ];
+  const risksToWatch = [
+    currentQuality.stale_risk >= 60 ? "行为样本偏陈旧，先补最近真实任务。" : "继续维持近期样本刷新。",
+    currentQuality.workflow_confidence < 0.5 ? "workflow 置信度偏低，避免让 Agent 过度拟合。" : "主 workflow 置信度可作为温和偏好使用。",
+    "任何生日叙事都不能覆盖安全边界。"
+  ];
+  const nextYearTargets = [
+    topWorkflow ? `把「${topWorkflow}」固化成可复用的 Agent 工作流。` : "先完成 5 次真实 ingest，建立第一条稳定 workflow。",
+    emergingSkills[0] ? `围绕「${emergingSkills[0]}」设计 30 天实践闭环。` : "让每次重要任务都留下可复盘的 .nms 行为记录。",
+    "让 /nms-auto 默认继承 birthday memory，同时保持显式 apply 边界。"
+  ];
+  const growthVectors = [
+    {
+      name: "行为稳定度",
+      signal: `${previousQuality.behavior_score} -> ${currentQuality.behavior_score}`,
+      evidence: [`current_sessions=${currentSessions.length}`, `previous_sessions=${previousSessions.length}`]
+    },
+    {
+      name: "主 workflow",
+      signal: topWorkflow ?? "暂无稳定 workflow",
+      evidence: stableWorkflows.slice(0, 3)
+    },
+    {
+      name: "领域重心",
+      signal: topDomain ?? "暂无稳定领域",
+      evidence: topDomains.map(([name, count]) => `${name}:${count}`)
+    }
+  ];
+  const reportDir = options?.outputDir
+    ? path.resolve(options.outputDir)
+    : path.join(storage.root, "artifacts", "birthday", "latest");
+  const assetDir = path.join(reportDir, "assets");
+  const derivedDir = path.join(storage.root, "derived", "birthday");
+  const historyDir = path.join(derivedDir, "history");
+  fs.mkdirSync(assetDir, { recursive: true });
+  fs.mkdirSync(historyDir, { recursive: true });
+
+  const capsulePath = path.join(derivedDir, "latest.json");
+  const capsuleHistoryPath = path.join(historyDir, `${stamp}.json`);
+  const htmlPath = path.join(reportDir, "birthday.html");
+  const mdPath = path.join(reportDir, "birthday.md");
+  const posterPath = path.join(assetDir, "birthday-poster.png");
+  const sourceHash = sha256(JSON.stringify({
+    generatedAt,
+    periodDays,
+    currentSessions: currentSessions.length,
+    previousSessions: previousSessions.length,
+    topSkills,
+    stableWorkflows,
+    topDomains,
+    currentQuality,
+    previousQuality
+  }));
+  const capsule: BirthdayCapsule = {
+    schema_version: 1,
+    generated_at: generatedAt,
+    project_id: storage.buildAgentContext().project_id,
+    period_days: periodDays,
+    sample_count: currentSessions.length,
+    previous_sample_count: previousSessions.length,
+    north_star: northStar,
+    retained_commitments: retainedCommitments,
+    stable_workflows: stableWorkflows,
+    emerging_skills: emergingSkills,
+    changed_habits: changedHabits,
+    growth_vectors: growthVectors,
+    risks_to_watch: risksToWatch,
+    next_year_targets: nextYearTargets,
+    agent_instructions: [
+      "Read birthday_memory from nms context before personalized work.",
+      "Preserve north_star unless the user explicitly changes it.",
+      "Treat next_year_targets as long-term guidance, not hard requirements.",
+      "Never use birthday narrative to bypass safety, review, tests, or real-data constraints."
+    ],
+    artifacts: {
+      capsule_ref: path.relative(storage.root, capsulePath).replaceAll("\\", "/"),
+      html_report_ref: path.relative(storage.root, htmlPath).replaceAll("\\", "/"),
+      markdown_ref: path.relative(storage.root, mdPath).replaceAll("\\", "/"),
+      poster_ref: options?.image ? path.relative(storage.root, posterPath).replaceAll("\\", "/") : undefined
+    }
+  };
+
+  const posterPrompt = [
+    "生成一张 NMS birthday memory poster，主题是“每天重启，但不忘北极星”。",
+    `必须只使用真实数据：sample_count=${capsule.sample_count}, behavior_score=${currentQuality.behavior_score}, workflows=${stableWorkflows.join(" | ") || "样本不足"}, skills=${topSkills.map(([name, count]) => `${name}:${count}`).join(" | ") || "样本不足"}.`,
+    "画面风格：未来感控制台、温暖生日仪式、Agent 记忆胶囊、中文标题“NMS Birthday”。",
+    "如果样本不足，画面必须标注“样本不足，正在学习”。不要编造额外 skill 或人格结论。"
+  ].join("\n");
+  if (options?.image) {
+    const promptDir = path.join(storage.root, "artifacts", "prompts");
+    fs.mkdirSync(promptDir, { recursive: true });
+    const promptPath = path.join(promptDir, `birthday-poster-${stamp}.md`);
+    fs.writeFileSync(promptPath, posterPrompt, "utf8");
+    storage.recordArtifact({
+      type: "prompt",
+      path: path.relative(storage.root, promptPath).replaceAll("\\", "/"),
+      source_data_hash: sourceHash,
+      real_data_only: true,
+      metadata: { kind: "birthday-poster", period_days: periodDays }
+    });
+    await generateImageViaRelay({
+      prompt: posterPrompt,
+      outputPath: posterPath,
+      baseUrl: options.baseUrl,
+      apiKey: options.apiKey,
+      model: options.model
+    });
+    storage.recordArtifact({
+      type: "image",
+      path: path.relative(storage.root, posterPath).replaceAll("\\", "/"),
+      source_data_hash: sourceHash,
+      real_data_only: true,
+      metadata: { kind: "birthday-poster", model: options.model ?? process.env.NMS_IMAGE_MODEL ?? "gpt-image-2" }
+    });
+  }
+
+  fs.writeFileSync(capsulePath, JSON.stringify(capsule, null, 2), "utf8");
+  fs.writeFileSync(capsuleHistoryPath, JSON.stringify(capsule, null, 2), "utf8");
+  const md = `# NMS Birthday Memory Capsule
+
+生成时间：${generatedAt}
+
+> 这不是一次性总结，而是后续 Agent 会读取的进化资产。
+
+## North Star
+
+${northStar}
+
+## Retained Commitments
+
+${retainedCommitments.map((item) => `- ${item}`).join("\n")}
+
+## Stable Workflows
+
+${stableWorkflows.map((item) => `- ${item}`).join("\n") || "- 样本不足，暂无稳定 workflow。"}
+
+## Emerging Skills
+
+${emergingSkills.map((item) => `- ${item}`).join("\n") || "- 暂无新高频 skill。"}
+
+## Changed Habits
+
+${changedHabits.map((item) => `- ${item}`).join("\n")}
+
+## Next Year Targets
+
+${nextYearTargets.map((item) => `- ${item}`).join("\n")}
+
+## Agent Instructions
+
+${capsule.agent_instructions.map((item) => `- ${item}`).join("\n")}
+`;
+  fs.writeFileSync(mdPath, md, "utf8");
+
+  const html = `<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NMS Birthday Memory Capsule</title>
+  <style>
+    :root { color-scheme: dark; --bg:#05070d; --panel:rgba(15,23,42,.78); --line:rgba(148,163,184,.24); --text:#eef2ff; --muted:#9ca3af; --cyan:#22d3ee; --gold:#fbbf24; --green:#34d399; --rose:#fb7185; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:"Aptos Display","Segoe UI","PingFang SC",sans-serif; background: radial-gradient(circle at 12% 4%, rgba(34,211,238,.25), transparent 30%), radial-gradient(circle at 88% 0%, rgba(251,191,36,.18), transparent 26%), linear-gradient(180deg,#080b16,#03050a 70%); color:var(--text); }
+    main { max-width:1180px; margin:0 auto; padding:48px 22px; }
+    .hero,.card { border:1px solid var(--line); background:var(--panel); border-radius:30px; box-shadow:0 24px 90px rgba(0,0,0,.35); }
+    .hero { padding:38px; overflow:hidden; position:relative; }
+    .hero:after { content:""; position:absolute; inset:auto -90px -90px auto; width:280px; height:280px; border-radius:50%; background:radial-gradient(circle, rgba(251,191,36,.2), transparent 70%); }
+    .eyebrow { color:var(--cyan); letter-spacing:.16em; text-transform:uppercase; font-size:12px; }
+    h1 { font-size:clamp(40px,6vw,82px); line-height:.92; margin:14px 0; max-width:900px; }
+    .subtitle { color:var(--muted); font-size:18px; line-height:1.7; max-width:760px; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin:22px 0; }
+    .two { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+    .card { padding:24px; margin-top:18px; }
+    .metric { font-size:36px; font-weight:850; margin-top:8px; }
+    .muted { color:var(--muted); }
+    h2 { margin:0 0 14px; font-size:24px; }
+    .pulse { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--green); box-shadow:0 0 26px var(--green); margin-right:8px; }
+    .node { border:1px solid rgba(34,211,238,.35); background:rgba(34,211,238,.1); color:#cffafe; padding:9px 12px; border-radius:999px; display:inline-block; margin:5px; }
+    .target { border-left:4px solid var(--gold); padding:12px 14px; background:rgba(251,191,36,.08); border-radius:16px; margin:10px 0; }
+    .risk { border-left:4px solid var(--rose); padding:12px 14px; background:rgba(251,113,133,.08); border-radius:16px; margin:10px 0; }
+    .list { display:grid; gap:10px; }
+    .item { padding:12px 14px; border:1px solid var(--line); border-radius:16px; background:rgba(2,6,23,.28); }
+    img { width:100%; border-radius:22px; border:1px solid var(--line); margin-top:16px; }
+    code { color:#cffafe; }
+    @media (max-width:900px){ .grid,.two{ grid-template-columns:repeat(2,1fr);} }
+    @media (max-width:560px){ main{padding:24px 14px}.grid,.two{ grid-template-columns:1fr}.hero{padding:24px} }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <div class="eyebrow"><span class="pulse"></span>NMS Birthday · Living Agent Asset</div>
+    <h1>每天重启，但不忘北极星。</h1>
+    <p class="subtitle">这不是一份生日总结，而是一枚会被后续 Agent 读取的记忆胶囊。它保留目标、边界和可继承经验，让下一次 /nms-auto 不从零开始。</p>
+    <div class="grid">
+      <div class="card"><div class="muted">本周期真实样本</div><div class="metric">${capsule.sample_count}</div></div>
+      <div class="card"><div class="muted">上周期样本</div><div class="metric">${capsule.previous_sample_count}</div></div>
+      <div class="card"><div class="muted">Behavior Score</div><div class="metric">${currentQuality.behavior_score}</div></div>
+      <div class="card"><div class="muted">Workflow Confidence</div><div class="metric">${Math.round(currentQuality.workflow_confidence * 100)}%</div></div>
+    </div>
+  </section>
+  ${capsule.sample_count === 0 ? `<section class="card risk"><h2>样本不足</h2><p>当前没有足够真实 session。NMS 不会编造生日画像，只会保留目标和安全边界。</p></section>` : ""}
+  <section class="card">
+    <h2>North Star</h2>
+    <div class="target">${escapeHtml(capsule.north_star)}</div>
+  </section>
+  <section class="two">
+    <div class="card">
+      <h2>保留下来的承诺</h2>
+      <div class="list">${capsule.retained_commitments.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("")}</div>
+    </div>
+    <div class="card">
+      <h2>下一岁路线图</h2>
+      <div class="list">${capsule.next_year_targets.map((item) => `<div class="target">${escapeHtml(item)}</div>`).join("")}</div>
+    </div>
+  </section>
+  <section class="card">
+    <h2>稳定 Workflow</h2>
+    ${capsule.stable_workflows.length > 0 ? capsule.stable_workflows.map((item) => `<span class="node">${escapeHtml(item)}</span>`).join("") : `<p class="muted">暂无稳定 workflow，先通过真实 ingest 继续学习。</p>`}
+  </section>
+  <section class="two">
+    <div class="card">
+      <h2>新出现的能力信号</h2>
+      <div class="list">${capsule.emerging_skills.length > 0 ? capsule.emerging_skills.map((item) => `<div class="item">${escapeHtml(item)}</div>`).join("") : `<div class="item">暂无新高频 skill。</div>`}</div>
+    </div>
+    <div class="card">
+      <h2>需要警惕的风险</h2>
+      <div class="list">${capsule.risks_to_watch.map((item) => `<div class="risk">${escapeHtml(item)}</div>`).join("")}</div>
+    </div>
+  </section>
+  <section class="card">
+    <h2>Agent 会继承什么</h2>
+    <div class="list">${capsule.agent_instructions.map((item) => `<div class="item"><code>${escapeHtml(item)}</code></div>`).join("")}</div>
+    <p class="muted">Capsule: ${escapeHtml(capsule.artifacts.capsule_ref)} · Markdown: ${escapeHtml(capsule.artifacts.markdown_ref)}</p>
+  </section>
+  ${fs.existsSync(posterPath) ? `<section class="card"><h2>Birthday Poster</h2><img src="${path.relative(reportDir, posterPath).replaceAll("\\", "/")}" alt="birthday poster" /></section>` : ""}
+</main>
+</body>
+</html>`;
+  fs.writeFileSync(htmlPath, html, "utf8");
+  storage.recordArtifact({
+    type: "context",
+    path: capsule.artifacts.capsule_ref,
+    source_data_hash: sourceHash,
+    real_data_only: true,
+    metadata: { kind: "birthday-capsule", period_days: periodDays }
+  });
+  storage.recordArtifact({
+    type: "report",
+    path: capsule.artifacts.html_report_ref,
+    source_data_hash: sourceHash,
+    real_data_only: true,
+    metadata: { kind: "birthday-report", format: "html", period_days: periodDays }
+  });
+  storage.recordEvent("REPORT_GENERATED", capsule.artifacts.html_report_ref, sourceHash);
+
+  const payload = {
+    generated_at: generatedAt,
+    capsule,
+    paths: {
+      capsule: capsulePath,
+      history: capsuleHistoryPath,
+      html: htmlPath,
+      markdown: mdPath,
+      poster: fs.existsSync(posterPath) ? posterPath : null
+    },
+    next_step: "Run /nms-auto; it will now inherit birthday_memory through nms context."
+  };
+  if (options?.format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    "== NMS Birthday ==",
+    "Mode: living memory capsule + birthday report",
+    `North Star: ${capsule.north_star}`,
+    `Samples: ${capsule.sample_count}`,
+    `Stable Workflow: ${capsule.stable_workflows[0] ?? "(not enough data yet)"}`,
+    `Next Target: ${capsule.next_year_targets[0]}`,
+    `Capsule: ${capsulePath}`,
+    `Report: ${htmlPath}`,
+    fs.existsSync(posterPath) ? `Poster: ${posterPath}` : "Poster: not generated (use --image when image relay is configured)",
+    payload.next_step
+  ].join("\n");
 }

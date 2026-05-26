@@ -1,3 +1,3 @@
 display_name: No More Skill
-short_description: Learn real user workflows, export Agent context, and generate guarded behavior reports from local .nms data.
-default_prompt: Analyze my recent NMS workflow, export agent-readable context, and generate a real-data HTML report.
+short_description: Learn real user workflows, export Agent context, generate reports, and create birthday memory capsules from local .nms data.
+default_prompt: Analyze my recent NMS workflow, export agent-readable context, generate a real-data HTML report, and create a living birthday memory capsule when useful.

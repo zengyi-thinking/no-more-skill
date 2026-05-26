@@ -1,5 +1,6 @@
 import {
   autoCommand,
+  birthdayCommand,
   briefCommand,
   contextCommand,
   dataStatusCommand,
@@ -54,9 +55,10 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
     "- /nms-flow",
     "- /nms-report",
     "- /nms-auto",
+    "- /nms-birthday",
     "",
     "Internal Agent workflow steps are hidden and run through /nms-auto.",
-    "Use /nms-flow to inspect behavior, /nms-report to generate a report, and /nms-auto to run the safe dry-run workflow."
+    "Use /nms-birthday to generate a living memory capsule that future /nms-auto runs can inherit."
   ].join("\n");
 
   const canonical = (() => {
@@ -85,6 +87,15 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
       return ingestCommand(args.input as string | undefined);
     case "/nms-auto":
       return autoCommand((args.format as "human" | "json") ?? "human");
+    case "/nms-birthday":
+      return birthdayCommand({
+        format: (args.format as "human" | "json") ?? "human",
+        image: toBool(args.image),
+        outputDir: args["output-dir"] as string | undefined,
+        baseUrl: args["base-url"] as string | undefined,
+        apiKey: args["api-key"] as string | undefined,
+        model: args.model as string | undefined
+      });
     case "/nms-flow":
       if (toBool(args.visual)) {
         const out = flowVisualCommand();

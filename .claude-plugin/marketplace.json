@@ -4,13 +4,13 @@
     "name": "zengyi-thinking"
   },
   "metadata": {
-    "description": "NMS: behavior learning, workflow replay, safe night harness, and visual reports.",
-    "version": "0.4.3"
+    "description": "NMS: behavior learning, hidden Agent workflow, birthday memory capsules, and visual reports.",
+    "version": "0.4.4"
   },
   "plugins": [
     {
       "name": "nms-skills",
-      "description": "Behavior cockpit, report generation, and guarded night execution for AI agents.",
+      "description": "Behavior cockpit, report generation, birthday memory capsules, and guarded Agent execution.",
       "source": "./",
       "strict": false,
       "skills": [

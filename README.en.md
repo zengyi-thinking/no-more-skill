@@ -23,13 +23,14 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 
 ## User-Facing Commands
 
-Most users only need three commands:
+Most users only need four commands:
 
 - `/nms-flow`: inspect recent workflows, skill frequency, user style, and data health.
 - `/nms-report`: generate a visual HTML report from real `.nms` behavior data.
 - `/nms-auto`: simulate the user's workflow from `.nms` and run the guarded dry-run gate.
+- `/nms-birthday`: generate a living birthday memory capsule that future Agents can inherit.
 
-`/nms-birthday` is planned next for birthday/yearly persona evolution reports. It will become user-facing only after the implementation is real.
+`/nms-birthday` is not just a yearly summary. It writes `.nms/derived/birthday/latest.json`, and future `/nms-auto` runs inherit its North Star and next-year targets through Agent Context.
 
 ## Agent Workflow
 
@@ -85,6 +86,7 @@ If your host uses `/<skill>-<function>` style, normal users should call:
 - `/nms-flow`
 - `/nms-report`
 - `/nms-auto`
+- `/nms-birthday`
 
 These commands call internal capabilities automatically. For example, `/nms-auto` transparently uses brief, suggest, guard, and the night gate.
 
@@ -93,12 +95,14 @@ GSD/Gemini style aliases:
 - `/nms:flow`
 - `/nms:report`
 - `/nms:auto`
+- `/nms:birthday`
 
 Codex style aliases:
 
 - `$nms-flow`
 - `$nms-report`
 - `$nms-auto`
+- `$nms-birthday`
 
 > Note: when testing `$nms-*` in local PowerShell, quote the command token: `npm run dev:skill -- '$nms-flow'`. In host command palettes, quoting is not required.
 
@@ -139,6 +143,7 @@ npm run dev -- ingest --input input.json
 npm run dev -- flow
 npm run dev -- report
 npm run dev -- auto
+npm run dev -- birthday
 ```
 
 ## Output Experience
@@ -146,6 +151,7 @@ npm run dev -- auto
 - `nms flow --visual` creates `.nms/flow-dashboard.html` with domain mix, skill frequency, main workflow path, and workflow edges.
 - `nms report` generates a product-style HTML cockpit report from real `.nms` data by default.
 - `nms auto` reads `.nms`, infers the workflow, checks write boundaries, and enters the dry-run Gate without applying changes.
+- `nms birthday` writes `.nms/derived/birthday/latest.json` plus a birthday HTML page; future `nms context` and `/nms-auto` inherit `birthday_memory`.
 - Internal Agent capabilities still exist, but `/nms-auto` owns the user-facing workflow so users do not need to memorize them.
 
 ## Safety Boundaries

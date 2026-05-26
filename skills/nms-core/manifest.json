@@ -1,30 +1,38 @@
 {
   "name": "nms-core",
-  "version": "0.2.1",
-  "description": "Behavior engineering skill with ingest/flow/replay/night/doctor/report commands.",
+  "version": "0.4.4",
+  "description": "Behavior engineering skill with flow/report/auto/birthday commands.",
   "entry": "SKILL.md",
   "commands": [
     {
       "name": "/nms",
-      "description": "Unified entrypoint. Use action=flow|ingest|replay|night|doctor|report."
+      "description": "Unified entrypoint. Shows user-facing NMS commands."
     },
     {
       "name": "/nms-flow",
       "description": "Show behavior cockpit in human/json mode."
     },
     {
-      "name": "/nms-night",
-      "description": "Run night harness in dry-run/apply mode with policy gate."
+      "name": "/nms-report",
+      "description": "Generate a real-data HTML behavior report."
     },
     {
-      "name": "/nms-doctor",
-      "description": "Read-only diagnostics for data/config/git safety."
+      "name": "/nms-auto",
+      "description": "Run the hidden Agent workflow with dry-run safety gate."
+    },
+    {
+      "name": "/nms-birthday",
+      "description": "Generate a living birthday memory capsule for future Agent runs."
     }
   ],
   "aliases": [
     "/nms:flow",
-    "/nms:night",
+    "/nms:report",
+    "/nms:auto",
+    "/nms:birthday",
     "$nms-flow",
-    "$nms-night"
+    "$nms-report",
+    "$nms-auto",
+    "$nms-birthday"
   ]
 }

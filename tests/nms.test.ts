@@ -454,8 +454,28 @@ describe.sequential("NMS v0.2 optimization", () => {
       const out = JSON.parse(autoCommand("json"));
       expect(out.entry).toBe("/nms-auto");
       expect(out.mode).toBe("dry-run");
-      expect(out.night_summary.final_state).toBe("GATE");
+      expect(out.hidden_internal_commands).toBe(true);
+      expect(out.agent_workflow.map((step: { stage: string }) => step.stage)).toEqual([
+        "READ_BEHAVIOR_MEMORY",
+        "BUILD_USER_BRIEF",
+        "SELECT_WORKFLOW",
+        "CHECK_WRITE_BOUNDARY",
+        "RUN_DRY_GATE"
+      ]);
+      expect(out.gate.final_state).toBe("GATE");
       expect(out.next_step).toContain("task-file");
+    });
+  });
+
+  test("auto command blocks before dry-run gate when pending files violate policy", () => {
+    withTempCwd(() => {
+      execSync("git init", { stdio: "pipe" });
+      fs.writeFileSync("README.md", "pending doc change", "utf8");
+      const out = JSON.parse(autoCommand("json"));
+      expect(out.decision).toBe("BLOCKED_BY_POLICY");
+      expect(out.write_guard.ok).toBe(false);
+      expect(out.gate.ran).toBe(false);
+      expect(out.gate.failure.code).toBe("POLICY_BLOCK");
     });
   });
 
@@ -679,14 +699,27 @@ describe.sequential("NMS v0.2 optimization", () => {
         args: {}
       });
       expect(helpUnified).toContain("NMS Skill Commands");
-      expect(helpUnified.indexOf("- /nms-flow")).toBeLessThan(helpUnified.indexOf("Agent/internal commands:"));
-      expect(helpUnified.indexOf("- /nms-report")).toBeLessThan(helpUnified.indexOf("Agent/internal commands:"));
-      expect(helpUnified.indexOf("- /nms-auto")).toBeLessThan(helpUnified.indexOf("Agent/internal commands:"));
-      expect(helpUnified.indexOf("- /nms-night")).toBeGreaterThan(helpUnified.indexOf("Agent/internal commands:"));
+      expect(helpUnified).toContain("- /nms-flow");
+      expect(helpUnified).toContain("- /nms-report");
+      expect(helpUnified).toContain("- /nms-auto");
+      expect(helpUnified).toContain("Internal Agent workflow steps are hidden");
+      expect(helpUnified).not.toContain("/nms-night");
+      expect(helpUnified).not.toContain("/nms-brief");
+      expect(helpUnified).not.toContain("/nms-guard");
     } finally {
         process.chdir(old);
       }
     })();
+  });
+
+  test("cli help hides internal workflow commands", () => {
+    const help = execSync("npm run -s dev -- --help", { cwd: process.cwd() }).toString();
+    expect(help).toContain("flow");
+    expect(help).toContain("report");
+    expect(help).toContain("auto");
+    expect(help).not.toMatch(/\n\s+night\b/);
+    expect(help).not.toMatch(/\n\s+brief\b/);
+    expect(help).not.toMatch(/\n\s+guard\b/);
   });
 
   test("classified slash routes are callable without user parameters", async () => {

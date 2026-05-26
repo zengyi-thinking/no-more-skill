@@ -21,10 +21,10 @@ import {
 import { runSkillRoute } from "./skill-router.js";
 
 const program = new Command();
-program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.2");
+program.name("nms").description("No More Skill - behavior engineering CLI").version("0.4.3");
 
 program
-  .command("ingest")
+  .command("ingest", { hidden: true })
   .description("ingest compressed context payload from file or stdin")
   .option("-i, --input <file>", "input JSON file path")
   .action((opts) => {
@@ -53,7 +53,7 @@ program
   });
 
 program
-  .command("context")
+  .command("context", { hidden: true })
   .description("export agent-readable user behavior context")
   .option("--task <text>", "task summary")
   .option("--task-file <file>", "task text file")
@@ -72,7 +72,7 @@ program
   });
 
 program
-  .command("brief")
+  .command("brief", { hidden: true })
   .description("generate a compact agent brief from .nms context")
   .option("--task <text>", "task summary")
   .option("--task-file <file>", "task text file")
@@ -85,7 +85,7 @@ program
   });
 
 program
-  .command("suggest")
+  .command("suggest", { hidden: true })
   .description("suggest a workflow for a task from history/domain packs")
   .option("--task <text>", "task summary")
   .option("--task-file <file>", "task text file")
@@ -105,7 +105,7 @@ program
   });
 
 program
-  .command("guard")
+  .command("guard", { hidden: true })
   .description("check write policy for files before an agent edits")
   .argument("[files...]", "files to check")
   .option("--format <type>", "human or json", "human")
@@ -115,14 +115,14 @@ program
   });
 
 program
-  .command("replay")
+  .command("replay", { hidden: true })
   .description("replay the most common workflow")
   .action(() => {
     process.stdout.write(`${replayCommand()}\n`);
   });
 
 program
-  .command("night")
+  .command("night", { hidden: true })
   .description("run night harness with real task input; default dry-run")
   .option("--dry-run", "force dry run mode")
   .option("--apply", "enable write/apply mode explicitly")
@@ -145,14 +145,14 @@ program
   });
 
 program
-  .command("doctor")
+  .command("doctor", { hidden: true })
   .description("read-only diagnostics for data and git safety")
   .action(() => {
     process.stdout.write(`${doctorCommand()}\n`);
   });
 
 program
-  .command("data")
+  .command("data", { hidden: true })
   .description("inspect .nms behavior data")
   .argument("[action]", "status", "status")
   .option("--format <type>", "human or json", "human")
@@ -166,7 +166,7 @@ program
   });
 
 program
-  .command("profile")
+  .command("profile", { hidden: true })
   .description("review learned user profile claims")
   .option("--review", "review profile claims", true)
   .option("--format <type>", "human or json", "human")
@@ -176,7 +176,7 @@ program
   });
 
 program
-  .command("route")
+  .command("route", { hidden: true })
   .description("agent-friendly route entry for slash-style invocation")
   .requiredOption("--cmd <slash>", "slash command, e.g. /nms-flow")
   .option("--args-json <json>", "json object for command args", "{}")

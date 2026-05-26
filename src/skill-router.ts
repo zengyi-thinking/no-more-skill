@@ -50,23 +50,13 @@ export async function runSkillRoute(input: SkillRouteInput): Promise<string> {
   const args = input.args;
 
   const helpText = [
-    "NMS Skill Commands (zero-argument first):",
+    "NMS Skill Commands:",
     "- /nms-flow",
     "- /nms-report",
     "- /nms-auto",
     "",
-    "Agent/internal commands:",
-    "- /nms-data",
-    "- /nms-profile",
-    "- /nms-context",
-    "- /nms-brief",
-    "- /nms-suggest",
-    "- /nms-guard",
-    "- /nms-replay",
-    "- /nms-doctor",
-    "- /nms-night",
-    "- /nms-ingest",
-    "Advanced flags still work when an Agent needs automation, but users should start with the classified commands above."
+    "Internal Agent workflow steps are hidden and run through /nms-auto.",
+    "Use /nms-flow to inspect behavior, /nms-report to generate a report, and /nms-auto to run the safe dry-run workflow."
   ].join("\n");
 
   const canonical = (() => {

@@ -25,7 +25,7 @@ Slash routes:
 - `/nms-report`
 - `/nms-auto`
 
-Internal routes remain available for Agents and diagnostics: `/nms-context`, `/nms-brief`, `/nms-suggest`, `/nms-guard`, `/nms-night`, `/nms-replay`, `/nms-ingest`, `/nms-data`, `/nms-profile`, `/nms-doctor`.
+Internal Agent steps are intentionally hidden from user-facing help. Agents should use `/nms-auto` for the complete guarded workflow and consult `skills/nms-core/references/AGENT_PROTOCOL.md` only when they need low-level automation.
 
 Runtime aliases:
 

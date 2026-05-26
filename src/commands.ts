@@ -10,7 +10,7 @@ import { processCompressedEvent } from "./hook/engine.js";
 import { detectDomainFromText, detectSessionDomain, domainPackFor } from "./hook/domainPacks.js";
 import { JsonStorage } from "./storage.js";
 import { State } from "./types.js";
-import type { AgentContext, HookInput, PlannerOutput, SessionRecord, Stats } from "./types.js";
+import type { AgentContext, HookInput, NightReport, PlannerOutput, SessionRecord, Stats } from "./types.js";
 
 const InputSchema = z.object({
   compressed_text: z.string(),
@@ -699,60 +699,172 @@ export function guardPendingCommand(format: "human" | "json" = "human"): string 
   return guardCommand(files, format);
 }
 
+type DataStatusPayload = {
+  sample_count: number;
+  latest_session_at: string | null;
+  domain_coverage: Array<{ name: string; count: number }>;
+  top_skills: Array<[string, number]>;
+  top_workflows: Array<[string, number]>;
+  quality: Stats["quality_metrics"];
+  warnings: string[];
+};
+
+type BriefPayload = {
+  task_summary: string;
+  sample_count: number;
+  confidence: number;
+  user_style: AgentContext["user_style"];
+  warnings: string[];
+};
+
+type SuggestPayload = {
+  detected_domain: string;
+  domain_confidence: number;
+  source: string;
+  suggested_workflow: string[];
+  why: string;
+};
+
+type GuardPayload = {
+  ok: boolean;
+  files: string[];
+  reason: string;
+};
+
+function decisionFromAuto(guard: GuardPayload, night: NightReport | null): "READY_FOR_REVIEW" | "BLOCKED_BY_POLICY" | "NEEDS_ATTENTION" {
+  if (!guard.ok) return "BLOCKED_BY_POLICY";
+  if (night?.final_state === State.GATE || night?.final_state === State.COMMIT) return "READY_FOR_REVIEW";
+  return "NEEDS_ATTENTION";
+}
+
 export function autoCommand(format: "human" | "json" = "human"): string {
+  const storage = new JsonStorage();
+  const task = defaultTaskSummary(storage);
   const data = JSON.parse(dataStatusCommand("json")) as {
     sample_count: number;
+    latest_session_at: string | null;
+    domain_coverage: Array<{ name: string; count: number }>;
+    top_skills: Array<[string, number]>;
+    top_workflows: Array<[string, number]>;
     quality: Stats["quality_metrics"];
     warnings: string[];
-  };
-  const brief = briefCommand({ profile: "strict" });
-  const suggestion = suggestCommand({ format: "human" });
-  const guard = guardPendingCommand("human");
-  const night = JSON.parse(nightCommand({ dryRun: true, explain: true })) as {
-    dry_run: boolean;
-    final_state: string;
-    logs: string[];
-    explain_chain?: string[];
-    failure?: unknown;
-  };
+  } satisfies DataStatusPayload;
+  const context = JSON.parse(contextCommand({ task, format: "json" })) as AgentContext;
+  const brief = JSON.parse(briefCommand({ task, profile: "strict", format: "json" })) as BriefPayload;
+  const suggestion = JSON.parse(suggestCommand({ task, format: "json" })) as SuggestPayload;
+  const guard = JSON.parse(guardPendingCommand("json")) as GuardPayload;
+  const night = guard.ok
+    ? JSON.parse(nightCommand({ dryRun: true, explain: true, task })) as NightReport
+    : null;
+  const decision = decisionFromAuto(guard, night);
+  const gateReason = !guard.ok
+    ? guard.reason
+    : night?.failure?.failure_reason ?? night?.explain_chain?.at(-1) ?? "Dry-run gate reached review-ready state.";
+  const workflow = suggestion.suggested_workflow.length > 0
+    ? suggestion.suggested_workflow
+    : context.relevant_workflows[0]?.steps ?? [];
+  const workflowText = workflow.length > 0 ? workflow.join(" -> ") : "(no stable workflow yet)";
+  const nextStep = decision === "READY_FOR_REVIEW"
+    ? "Review the generated dry-run plan. Use an explicit reviewed task-file before any apply."
+    : decision === "BLOCKED_BY_POLICY"
+      ? "Resolve or move pending files into the allowed sandbox/feature scope, then run /nms-auto again."
+      : "Fix the reported policy/test/review issue, then run /nms-auto again.";
+  const agentWorkflow = [
+    {
+      stage: "READ_BEHAVIOR_MEMORY",
+      status: "done",
+      summary: `${context.data_quality.sample_count} real sample(s), confidence ${context.data_quality.confidence}.`
+    },
+    {
+      stage: "BUILD_USER_BRIEF",
+      status: "done",
+      summary: `Style=${brief.user_style.communication.join(", ") || "unknown"}; avoid=${brief.user_style.avoid.join(", ") || "none"}.`
+    },
+    {
+      stage: "SELECT_WORKFLOW",
+      status: "done",
+      summary: `${suggestion.source}; ${workflowText}.`
+    },
+    {
+      stage: "CHECK_WRITE_BOUNDARY",
+      status: guard.ok ? "pass" : "block",
+      summary: guard.reason
+    },
+    {
+      stage: "RUN_DRY_GATE",
+      status: guard.ok ? (night?.final_state === State.GATE ? "pass" : "attention") : "skipped",
+      summary: guard.ok ? gateReason : "Skipped because write boundary failed before execution."
+    }
+  ];
   const payload = {
     mode: "dry-run",
     entry: "/nms-auto",
+    hidden_internal_commands: true,
+    decision,
+    task_summary: task,
     data_quality: {
       sample_count: data.sample_count,
+      latest_session_at: data.latest_session_at,
       behavior_score: data.quality.behavior_score,
       workflow_confidence: data.quality.workflow_confidence,
+      stale_risk: data.quality.stale_risk,
       warnings: data.warnings
     },
-    guard_summary: guard,
-    night_summary: {
-      dry_run: night.dry_run,
-      final_state: night.final_state,
-      explain_chain: night.explain_chain ?? [],
-      failure: night.failure ?? null
+    user_profile_summary: {
+      communication: brief.user_style.communication,
+      workflow_preference: brief.user_style.workflow,
+      avoid: brief.user_style.avoid
     },
-    next_step: night.final_state === State.GATE
-      ? "Review the dry-run output. Use an explicit reviewed task-file before any apply."
-      : "Fix the reported policy/test/review issue, then run /nms-auto again."
+    selected_workflow: {
+      domain: suggestion.detected_domain,
+      confidence: suggestion.domain_confidence,
+      source: suggestion.source,
+      steps: workflow,
+      why: suggestion.why
+    },
+    write_guard: {
+      ok: guard.ok,
+      files_checked: guard.files,
+      reason: guard.reason
+    },
+    gate: {
+      ran: Boolean(night),
+      final_state: night?.final_state ?? State.ROLLBACK,
+      dry_run: night?.dry_run ?? true,
+      explain_chain: night?.explain_chain ?? [],
+      failure: night?.failure ?? (!guard.ok
+        ? {
+            code: "POLICY_BLOCK",
+            failure_reason: guard.reason,
+            recovery_hint: "Resolve pending files outside the allowed write scope before auto execution.",
+            retry_count: 0,
+            non_retryable: true,
+            state_at_failure: State.PLAN,
+            artifacts_ref: "write-guard"
+          }
+        : null)
+    },
+    agent_workflow: agentWorkflow,
+    next_step: nextStep
   };
 
   if (format === "json") return JSON.stringify(payload, null, 2);
   return [
     "== NMS Auto ==",
-    "Mode: dry-run only",
-    "Purpose: read .nms behavior data, simulate the user's workflow, and run the guarded execution gate.",
+    "Mode: hidden-agent workflow, dry-run only",
+    `Decision: ${payload.decision}`,
+    `Task: ${payload.task_summary}`,
     `Samples: ${payload.data_quality.sample_count}`,
     `Behavior Score: ${payload.data_quality.behavior_score}`,
     `Workflow Confidence: ${payload.data_quality.workflow_confidence}`,
-    "== Agent Brief ==",
-    brief,
-    "== Suggested Workflow ==",
-    suggestion,
-    "== Write Guard ==",
-    guard,
-    "== Execution Gate ==",
-    `final_state=${payload.night_summary.final_state}`,
-    ...(payload.night_summary.explain_chain.length > 0 ? payload.night_summary.explain_chain : ["No explain chain available."]),
+    `Selected Workflow: ${workflowText}`,
+    "== Agent Workflow ==",
+    ...agentWorkflow.map((step, index) => `${index + 1}. ${step.stage}: ${step.status}\n   ${step.summary}`),
+    "== Safety Gate ==",
+    `write_boundary=${payload.write_guard.ok ? "ALLOW" : "BLOCK"}`,
+    `gate_ran=${payload.gate.ran}`,
+    `final_state=${payload.gate.final_state}`,
+    `why=${gateReason}`,
     `Next: ${payload.next_step}`
   ].join("\n");
 }

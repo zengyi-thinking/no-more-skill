@@ -18,7 +18,7 @@ In one line: **from prompt engineering to behavior engineering + execution syste
 1. It learns behavior traces, not only static prompts.
 2. Safety-first defaults: dry-run, retry cap, write whitelist, branch guard.
 3. It converges over time: main workflows become clearer and reusable.
-4. It is explainable: `nms night --explain` shows why gate passed or rolled back.
+4. It is explainable: `/nms-auto` prints the dry-run gate chain and why it passed or rolled back.
 5. It is not limited to coding: domain packs let writing, research, learning, product, content, or your own domains use the same behavior model.
 
 ## User-Facing Commands
@@ -31,20 +31,15 @@ Most users only need three commands:
 
 `/nms-birthday` is planned next for birthday/yearly persona evolution reports. It will become user-facing only after the implementation is real.
 
-## Agent / Internal Capabilities
+## Agent Workflow
 
-These commands remain available, but they should not be promoted as the main user interface:
+Users no longer need to memorize internal commands. `/nms-auto` behaves like a cautious development Agent and automatically:
 
-- `/nms-brief`: read user habits, style, constraints, and safety policy before an Agent starts.
-- `/nms-suggest`: recommend a workflow from history and domain packs.
-- `/nms-guard`: check write paths, file kinds, and policy scope; defaults to pending Git files.
-- `/nms-context`: export agent-readable behavior context.
-- `/nms-night`: internal state machine for PLAN -> EXECUTE -> TEST -> REVIEW -> GATE.
-- `/nms-replay`: replay the most common workflow for `/nms-flow` and `/nms-auto`.
-- `/nms-ingest`: ingest real compress events, ideally from a host hook.
-- `/nms-data`: inspect `.nms` data quality, samples, artifacts, and domain coverage.
-- `/nms-profile`: review evidence behind learned profile claims.
-- `/nms-doctor`: diagnose local system/data health when something looks wrong.
+- reads `.nms` behavior memory and user style
+- builds the preflight brief and selects a workflow
+- checks write boundaries and pending Git files
+- runs the dry-run Gate with pass/block reasons
+- returns the next concrete action
 
 ## Domain Packs
 
@@ -150,8 +145,8 @@ npm run dev -- auto
 
 - `nms flow --visual` creates `.nms/flow-dashboard.html` with domain mix, skill frequency, main workflow path, and workflow edges.
 - `nms report` generates a product-style HTML cockpit report from real `.nms` data by default.
-- `nms auto` reads `.nms`, infers the workflow, runs guard, and enters the dry-run gate without applying changes.
-- Agent-internal commands such as `context / brief / suggest / guard / night / data / profile / doctor / ingest` stay available but do not need to be memorized by users.
+- `nms auto` reads `.nms`, infers the workflow, checks write boundaries, and enters the dry-run Gate without applying changes.
+- Internal Agent capabilities still exist, but `/nms-auto` owns the user-facing workflow so users do not need to memorize them.
 
 ## Safety Boundaries
 

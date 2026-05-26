@@ -17,7 +17,7 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 1. 它学的是“行为轨迹”，不是只记一段提示词。
 2. 它默认安全：`dry-run`、重试上限、写入白名单、分支保护。
 3. 它越来越懂你：会形成主 workflow、给出下一步行动建议。
-4. 它可审计：night 模式支持 `--explain`，清楚告诉你为什么通过/回滚。
+4. 它可审计：`/nms-auto` 会输出 dry-run Gate 判定链，清楚告诉你为什么通过/回滚。
 5. 它不只服务编程：`domain pack` 能把写作、研究、学习、产品、内容创作等场景接入同一套行为模型。
 
 ## 用户主入口
@@ -30,20 +30,15 @@ NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行
 
 下一步会新增 `/nms-birthday`，用于生日/年度人格进化报告。它会在实现完成后再进入主入口，避免提前暴露空功能。
 
-## Agent / 内部能力
+## Agent 工作流
 
-下面这些命令仍然可用，但不建议作为普通用户主入口宣传：
+内部步骤不再要求用户记命令。`/nms-auto` 会像一个谨慎的开发 Agent 一样自动完成：
 
-- `/nms-brief`：Agent 开工前读取用户习惯、风格、禁忌和安全边界。
-- `/nms-suggest`：根据历史 workflow 和 domain pack 推荐任务流程。
-- `/nms-guard`：写入前检查路径、文件类型和权限范围，默认检查当前 Git 待改文件。
-- `/nms-context`：导出 Agent 可读的用户行为上下文。
-- `/nms-night`：底层执行状态机，负责 PLAN -> EXECUTE -> TEST -> REVIEW -> GATE。
-- `/nms-replay`：复用最常用 workflow，主要服务 `/nms-flow` 和 `/nms-auto`。
-- `/nms-ingest`：采集真实 compress 数据，应由 hook 或宿主集成自动触发。
-- `/nms-data`：检查 `.nms` 数据质量、样本量、artifact、domain 覆盖。
-- `/nms-profile`：审查用户画像证据。
-- `/nms-doctor`：系统健康诊断，出问题时再提示用户运行。
+- 读取 `.nms` 行为记忆和用户风格
+- 生成任务前简报和 workflow 选择
+- 检查当前写入边界和 Git 待改文件
+- 运行 dry-run Gate，并给出通过/阻断原因
+- 输出下一步应该怎么做
 
 ## 领域扩展：不只 Coding
 
@@ -170,10 +165,10 @@ npm run dev -- auto
 
 `nms auto`：
 - 默认 dry-run，不会直接写仓库
-- 内部读取 brief/context，推断 workflow，运行 guard，再进入 night gate
-- 输出 Gate 结果和下一步建议
+- 内部读取行为记忆、推断 workflow、检查写入边界，再进入 dry-run Gate
+- 只输出用户需要看的摘要、Gate 结果和下一步建议，不暴露内部命令细节
 
-Agent 内部会用到 `context / brief / suggest / guard / night / data / profile / doctor / ingest`，但这些不需要普通用户主动记忆。
+Agent 内部能力仍然存在，但默认被 `/nms-auto` 接管，不需要普通用户主动记忆。
 
 `nms report --image`：
 - 调用你配置的中转站（默认模型 `gpt-image-2`）输出三张图：

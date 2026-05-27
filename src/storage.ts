@@ -433,6 +433,7 @@ export class JsonStorage {
     try {
       const wish = JSON.parse(fs.readFileSync(wishPath, "utf8")) as BirthdayWishContract;
       return {
+        wish_id: wish.wish_id,
         latest_wish_ref: relativeToRoot(this.root, wishPath),
         generated_at: wish.generated_at,
         source: wish.source,

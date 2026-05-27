@@ -18,6 +18,7 @@ import {
   hostsCommand,
   ingestCommand,
   ingestWatchCommand,
+  ingestWatchLoopCommand,
   hookIngestFileCommand,
   nightCommand,
   profileReviewCommand,
@@ -542,7 +543,8 @@ describe.sequential("NMS v0.2 optimization", () => {
         }));
         expect(wish.contract.wish_text).toContain("PRD分析");
         expect(wish.contract.status).toBe("active");
-        expect(wish.contract.groundedness.score).toBeGreaterThan(0);
+        expect(wish.contract.groundedness.score).toBeLessThanOrEqual(60);
+        expect(["low", "medium"]).toContain(wish.contract.groundedness.level);
         expect(wish.contract.execution_contract.next_agent_bias.length).toBeGreaterThan(0);
         expect(fs.existsSync(path.join(process.cwd(), ".nms", "derived", "birthday-wish", "latest.json"))).toBe(true);
 
@@ -568,7 +570,229 @@ describe.sequential("NMS v0.2 optimization", () => {
         expect(wish.contract.status).toBe("proposed");
         expect(wish.contract.groundedness.level).toBe("low");
         expect(wish.candidate_wishes.length).toBeGreaterThan(0);
-        expect(fs.existsSync(path.join(process.cwd(), ".nms", "artifacts", "birthday-wish", "latest", "wish.html"))).toBe(true);
+        const wishHtmlPath = path.join(process.cwd(), ".nms", "artifacts", "birthday-wish", "latest", "wish.html");
+        expect(fs.existsSync(wishHtmlPath)).toBe(true);
+        const wishHtml = fs.readFileSync(wishHtmlPath, "utf8");
+        expect(wishHtml).toContain("候选方向");
+        expect(wishHtml).toContain("不会直接变成执行偏置");
+        const wishMd = fs.readFileSync(path.join(process.cwd(), ".nms", "artifacts", "birthday-wish", "latest", "wish.md"), "utf8");
+        expect(wishMd).toContain("状态：proposed");
+        expect(wishMd).toContain("来源：agent");
+        expect(wishMd).toContain("不会直接把它当成执行偏置");
+
+        const auto = JSON.parse(autoCommand("json"));
+        expect(auto.birthday_wish.status).toBe("proposed");
+        expect(auto.selected_workflow.why).not.toContain("Wish bias");
+        expect(auto.agent_workflow[2].summary).not.toContain("wish-bias");
+        const human = await birthdayWishCommand({ format: "human" });
+        expect(human).toContain("Source: agent");
+        expect(human).toContain("candidate wish only");
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("agent-proposed birthday wish stays conservative under low workflow confidence", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const payloads = [
+          {
+            compressed_text: "PRD分析 UI生成",
+            conversation: "先 PRD分析 再 UI生成",
+            tool: "codex"
+          },
+          {
+            compressed_text: "问题定义 资料收集",
+            conversation: "先 问题定义 再 资料收集",
+            tool: "claude"
+          },
+          {
+            compressed_text: "选题分析 草稿生成",
+            conversation: "先 选题分析 再 草稿生成",
+            tool: "codex"
+          }
+        ];
+        for (const [index, payload] of payloads.entries()) {
+          const file = path.join(process.cwd(), `input-${index}.json`);
+          fs.writeFileSync(file, JSON.stringify(payload), "utf8");
+          ingestCommand(file);
+        }
+
+        const wish = JSON.parse(await birthdayWishCommand({ format: "json" }));
+        expect(wish.contract.source).toBe("agent");
+        expect(wish.contract.status).toBe("proposed");
+        expect(wish.contract.groundedness.score).toBeLessThanOrEqual(60);
+        expect(["low", "medium"]).toContain(wish.contract.groundedness.level);
+        expect(wish.contract.groundedness.why.some((item: string) => item.includes("保守封顶"))).toBe(true);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("agent-sourced birthday wish never biases auto execution", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const inputFile = path.join(process.cwd(), "input.json");
+        fs.writeFileSync(
+          inputFile,
+          JSON.stringify({
+            compressed_text: "PRD分析 UI生成 代码生成",
+            conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+            tool: "codex"
+          }),
+          "utf8"
+        );
+        ingestCommand(inputFile);
+
+        const wish = JSON.parse(await birthdayWishCommand({
+          format: "json",
+          source: "agent",
+          wishText: "我建议下一阶段把 PRD分析 和 代码生成 固化成更稳定的 Agent 协作方式"
+        }));
+        expect(wish.contract.source).toBe("agent");
+        expect(wish.contract.status).toBe("proposed");
+        expect(wish.contract.groundedness.score).toBeLessThanOrEqual(60);
+        expect(["low", "medium"]).toContain(wish.contract.groundedness.level);
+        expect(wish.contract.groundedness.why[0]).toContain("Agent 提议");
+
+        const auto = JSON.parse(autoCommand("json"));
+        expect(auto.birthday_wish.source).toBe("agent");
+        expect(auto.selected_workflow.why).not.toContain("Wish bias");
+        expect(auto.agent_workflow[2].summary).not.toContain("wish-bias");
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("agent-sourced explicit wish stays conservative even with stronger sample volume", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const payloads = [
+          { compressed_text: "PRD分析 UI生成 代码生成", conversation: "先 PRD分析 再 UI生成 最后 代码生成", tool: "codex" },
+          { compressed_text: "PRD分析 UI生成 代码生成", conversation: "继续 PRD分析 和 代码生成", tool: "claude" },
+          { compressed_text: "PRD分析 代码生成", conversation: "PRD分析 -> 代码生成", tool: "codex" },
+          { compressed_text: "PRD分析 UI生成", conversation: "PRD分析 -> UI生成", tool: "codex" },
+          { compressed_text: "PRD分析 代码生成 Debug", conversation: "先 PRD分析 再 代码生成 最后 Debug", tool: "claude" },
+          { compressed_text: "PRD分析 UI生成 代码生成", conversation: "重复主流程", tool: "codex" }
+        ];
+        for (const [index, payload] of payloads.entries()) {
+          const file = path.join(process.cwd(), `seed-${index}.json`);
+          fs.writeFileSync(file, JSON.stringify(payload), "utf8");
+          ingestCommand(file);
+        }
+
+        const wish = JSON.parse(await birthdayWishCommand({
+          format: "json",
+          source: "agent",
+          wishText: "我建议下一阶段把 PRD分析 和 代码生成 固化成更稳定的 Agent 协作方式"
+        }));
+        expect(wish.contract.source).toBe("agent");
+        expect(wish.contract.status).toBe("proposed");
+        expect(wish.contract.groundedness.score).toBeLessThanOrEqual(60);
+        expect(["low", "medium"]).toContain(wish.contract.groundedness.level);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("birthday wish keeps stable identity for refreshes and rotates id for a new wish", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const seed = path.join(process.cwd(), "seed.json");
+        fs.writeFileSync(
+          seed,
+          JSON.stringify({
+            compressed_text: "PRD分析 UI生成 代码生成",
+            conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+            tool: "codex"
+          }),
+          "utf8"
+        );
+        ingestCommand(seed);
+
+        const first = JSON.parse(await birthdayWishCommand({
+          format: "json",
+          wishText: "我希望下一阶段把 PRD分析 和 代码生成 固化成更稳定的 Agent 协作方式"
+        }));
+        const latestPath = path.join(process.cwd(), ".nms", "derived", "birthday-wish", "latest.json");
+        const latest = JSON.parse(fs.readFileSync(latestPath, "utf8"));
+        latest.execution_contract.keep = ["CUSTOM_KEEP_MARKER"];
+        latest.execution_contract.stop = ["CUSTOM_STOP_MARKER"];
+        latest.execution_contract.start = ["CUSTOM_START_MARKER"];
+        fs.writeFileSync(latestPath, JSON.stringify(latest, null, 2), "utf8");
+
+        const second = JSON.parse(await birthdayWishCommand({ format: "json" }));
+        const third = JSON.parse(await birthdayWishCommand({
+          format: "json",
+          wishText: "我希望下一阶段把研究和资料整理变成新的主线"
+        }));
+
+        expect(first.contract.wish_id).toBe(second.contract.wish_id);
+        expect(first.contract.wish_text).toBe(second.contract.wish_text);
+        expect(third.contract.wish_id).not.toBe(first.contract.wish_id);
+        expect(second.contract.execution_contract.keep).toContain("CUSTOM_KEEP_MARKER");
+        expect(third.contract.execution_contract.keep).not.toContain("CUSTOM_KEEP_MARKER");
+        expect(third.contract.execution_contract.stop).not.toContain("CUSTOM_STOP_MARKER");
+        expect(third.contract.execution_contract.start).not.toContain("CUSTOM_START_MARKER");
+
+        const historyDir = path.join(process.cwd(), ".nms", "derived", "birthday-wish", "history");
+        const historyFiles = fs.readdirSync(historyDir);
+        expect(historyFiles.some((file) => file.startsWith(first.contract.wish_id))).toBe(true);
+        expect(historyFiles.some((file) => file.startsWith(third.contract.wish_id))).toBe(true);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("legacy birthday wish without wish_id keeps continuity on refresh", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const seed = path.join(process.cwd(), "seed.json");
+        fs.writeFileSync(
+          seed,
+          JSON.stringify({
+            compressed_text: "PRD分析 UI生成 代码生成",
+            conversation: "先 PRD分析 再 UI生成 最后 代码生成",
+            tool: "codex"
+          }),
+          "utf8"
+        );
+        ingestCommand(seed);
+
+        const first = JSON.parse(await birthdayWishCommand({
+          format: "json",
+          wishText: "我希望下一阶段把 PRD分析 和 代码生成 固化成更稳定的 Agent 协作方式"
+        }));
+        const latestPath = path.join(process.cwd(), ".nms", "derived", "birthday-wish", "latest.json");
+        const legacy = JSON.parse(fs.readFileSync(latestPath, "utf8"));
+        delete legacy.wish_id;
+        fs.writeFileSync(latestPath, JSON.stringify(legacy, null, 2), "utf8");
+
+        const second = JSON.parse(await birthdayWishCommand({ format: "json" }));
+        const third = JSON.parse(await birthdayWishCommand({ format: "json" }));
+        expect(second.contract.wish_id).toBe(third.contract.wish_id);
+        expect(second.contract.wish_id).not.toBe("latest");
+        expect(second.contract.wish_text).toBe(first.contract.wish_text);
       } finally {
         process.chdir(old);
       }
@@ -933,6 +1157,86 @@ describe.sequential("NMS v0.2 optimization", () => {
     });
   });
 
+  test("ingest watch loop consumes repeated writes to the same filename", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const inbox = path.join(process.cwd(), ".nms", "inbox");
+        fs.mkdirSync(inbox, { recursive: true });
+
+        const watchPromise = ingestWatchLoopCommand(inbox, 50, 900, 120);
+        setTimeout(() => {
+          fs.writeFileSync(
+            path.join(inbox, "latest.json"),
+            JSON.stringify({
+              compressed_text: "PRD分析 代码生成",
+              conversation: "先 PRD分析 再 代码生成",
+              tool: "codex"
+            }),
+            "utf8"
+          );
+        }, 80);
+        setTimeout(() => {
+          fs.writeFileSync(
+            path.join(inbox, "latest.json"),
+            JSON.stringify({
+              compressed_text: "问题定义 资料收集",
+              conversation: "先 问题定义 再 资料收集",
+              tool: "claude"
+            }),
+            "utf8"
+          );
+        }, 320);
+        const summary = JSON.parse(await watchPromise);
+        expect(summary.processed).toBe(2);
+        expect(summary.ingested).toBe(2);
+
+        const db = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".nms", "data.json"), "utf8"));
+        expect(db.sessions.length).toBe(2);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
+  test("ingest watch loop waits for file to settle before classifying invalid json as a failure", async () => {
+    await (async () => {
+      const old = process.cwd();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nms-"));
+      process.chdir(dir);
+      try {
+        const inbox = path.join(process.cwd(), ".nms", "inbox");
+        fs.mkdirSync(inbox, { recursive: true });
+
+        const watchPromise = ingestWatchLoopCommand(inbox, 50, 1200, 120, 600);
+        setTimeout(() => {
+          fs.writeFileSync(path.join(inbox, "latest.json"), "{\"compressed_text\":", "utf8");
+        }, 60);
+        setTimeout(() => {
+          fs.writeFileSync(
+            path.join(inbox, "latest.json"),
+            JSON.stringify({
+              compressed_text: "PRD分析 UI生成",
+              conversation: "先 PRD分析 再 UI生成",
+              tool: "codex"
+            }),
+            "utf8"
+          );
+        }, 420);
+
+        const summary = JSON.parse(await watchPromise);
+        expect(summary.ingested).toBe(1);
+        expect(summary.failed).toBe(0);
+        const errorDir = path.join(process.cwd(), ".nms", "artifacts", "errors");
+        expect(fs.readdirSync(errorDir).length).toBe(0);
+      } finally {
+        process.chdir(old);
+      }
+    })();
+  });
+
   test("guard secret scan and night failure reports include safe recovery commands", () => {
     withTempCwd(() => {
       fs.mkdirSync("sandbox/new", { recursive: true });
@@ -1071,7 +1375,7 @@ describe.sequential("NMS v0.2 optimization", () => {
     expect(help).not.toMatch(/\n\s+night\b/);
     expect(help).not.toMatch(/\n\s+brief\b/);
     expect(help).not.toMatch(/\n\s+guard\b/);
-  });
+  }, 15000);
 
   test("bare cli command prints onboarding instead of doing nothing", () => {
     const out = execSync("npm run -s dev", { cwd: process.cwd() }).toString();

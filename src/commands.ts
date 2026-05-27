@@ -9,6 +9,14 @@ import { readPlannerInput, runNightHarness } from "./harness/engine.js";
 import { detectHostIntegrations, formatHostReport, writeHostCommandFiles } from "./host-integration.js";
 import { processCompressedEvent } from "./hook/engine.js";
 import { detectDomainFromText, detectSessionDomain, domainPackFor } from "./hook/domainPacks.js";
+import {
+  alignmentScore,
+  buildDefaultWishText,
+  candidateWishOptions,
+  defaultWishExecutionContract,
+  deriveWishType,
+  groundednessLevel
+} from "./birthday-wish-logic.js";
 import { JsonStorage, redactText } from "./storage.js";
 import { State } from "./types.js";
 import type { AgentContext, BirthdayCapsule, BirthdayWishContract, BirthdayWishMemory, HookConsumeSummary, HookInput, NightReport, PlannerOutput, PolicyProfileName, SessionRecord, Stats } from "./types.js";
@@ -209,11 +217,6 @@ export function ingestWatchCommand(watchDir?: string): string {
   const storage = new JsonStorage();
   const dir = path.resolve(watchDir ?? path.join(storage.root, "inbox"));
   fs.mkdirSync(dir, { recursive: true });
-  const queue = fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => path.join(dir, entry.name))
-    .sort();
   const summary: HookConsumeSummary = {
     generated_at: new Date().toISOString(),
     watched_dir: dir,
@@ -224,23 +227,13 @@ export function ingestWatchCommand(watchDir?: string): string {
     archived: [],
     failed_records: []
   };
-  const notes: string[] = [];
-  for (const file of queue) {
-    const result = processHookFile(file, storage, true);
-    summary.processed += 1;
-    if (result.status === "ingested") summary.ingested += 1;
-    if (result.status === "duplicate") summary.duplicates += 1;
-    if (result.status === "failed") summary.failed += 1;
-    if (result.archivePath) summary.archived.push(result.archivePath);
-    if (result.errorPath) summary.failed_records.push(result.errorPath);
-    notes.push(`${path.basename(file)}:${result.status}`);
-  }
+  const notes = consumeInboxOnce(storage, dir, summary);
   recordCommandAudit(storage, {
     command: "ingest-watch",
     triggeredBy: "local-cli",
     policyProfile: "normal",
     inputSummary: `consume inbox ${dir}`,
-    fileScope: queue.map((file) => file.replaceAll("\\", "/")),
+    fileScope: [],
     gateResult: summary.failed > 0 ? "PARTIAL" : "OK",
     artifactPaths: [
       ...summary.archived.map((file) => relativeToNmsRoot(storage, file)),
@@ -251,11 +244,16 @@ export function ingestWatchCommand(watchDir?: string): string {
   return JSON.stringify(summary, null, 2);
 }
 
-export async function ingestWatchLoopCommand(watchDir?: string, pollIntervalMs = 2000): Promise<string> {
+export async function ingestWatchLoopCommand(
+  watchDir?: string,
+  pollIntervalMs = 2000,
+  stopAfterMs?: number,
+  settleMs = 250,
+  invalidGraceMs = 1200
+): Promise<string> {
   const storage = new JsonStorage();
   const dir = path.resolve(watchDir ?? path.join(storage.root, "inbox"));
   fs.mkdirSync(dir, { recursive: true });
-  const processed = new Set<string>();
   const summary: HookConsumeSummary = {
     generated_at: new Date().toISOString(),
     watched_dir: dir,
@@ -266,16 +264,54 @@ export async function ingestWatchLoopCommand(watchDir?: string, pollIntervalMs =
     archived: [],
     failed_records: []
   };
+  const fileState = new Map<string, { signature: string; changedAt: number; invalidSince?: number }>();
+  const signatureFor = (file: string): string => {
+    const stat = fs.statSync(file);
+    return `${stat.size}:${stat.mtimeMs}`;
+  };
   const scan = () => {
+    const now = Date.now();
     const files = fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
       .map((entry) => path.join(dir, entry.name))
       .sort();
+    const live = new Set(files);
+
+    for (const tracked of [...fileState.keys()]) {
+      if (!live.has(tracked)) fileState.delete(tracked);
+    }
+
     for (const file of files) {
-      const key = path.basename(file);
-      if (processed.has(key)) continue;
-      processed.add(key);
+      let signature: string;
+      try {
+        signature = signatureFor(file);
+      } catch {
+        continue;
+      }
+      const existing = fileState.get(file);
+      if (!existing || existing.signature !== signature) {
+        fileState.set(file, { signature, changedAt: now });
+        continue;
+      }
+      if (now - existing.changedAt < settleMs) continue;
+
+      let parsedOk = false;
+      try {
+        JSON.parse(fs.readFileSync(file, "utf8"));
+        parsedOk = true;
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          if (!existing.invalidSince) {
+            existing.invalidSince = now;
+            fileState.set(file, existing);
+            continue;
+          }
+          if (now - existing.invalidSince < invalidGraceMs) continue;
+        }
+      }
+      if (!parsedOk && existing.invalidSince && now - existing.invalidSince < invalidGraceMs) continue;
+
       const result = processHookFile(file, storage, true);
       summary.processed += 1;
       if (result.status === "ingested") summary.ingested += 1;
@@ -283,7 +319,8 @@ export async function ingestWatchLoopCommand(watchDir?: string, pollIntervalMs =
       if (result.status === "failed") summary.failed += 1;
       if (result.archivePath) summary.archived.push(result.archivePath);
       if (result.errorPath) summary.failed_records.push(result.errorPath);
-      process.stdout.write(`${JSON.stringify({ file: key, status: result.status, summary: result.summary })}\n`);
+      process.stdout.write(`${JSON.stringify({ file: path.basename(file), status: result.status, summary: result.summary })}\n`);
+      fileState.delete(file);
     }
   };
   process.stdout.write(`Watching ${dir} for real hook payloads. Press Ctrl+C to stop.\n`);
@@ -291,11 +328,19 @@ export async function ingestWatchLoopCommand(watchDir?: string, pollIntervalMs =
   await new Promise<void>((resolve) => {
     const stop = () => {
       clearInterval(timer);
+      if (stopTimer) clearTimeout(stopTimer);
+      watcher?.close();
       process.removeListener("SIGINT", stop);
       process.removeListener("SIGTERM", stop);
       resolve();
     };
     const timer = setInterval(scan, pollIntervalMs);
+    const watcher = fs.watch(dir, { persistent: true }, () => {
+      scan();
+    });
+    const stopTimer = typeof stopAfterMs === "number" && stopAfterMs > 0
+      ? setTimeout(stop, stopAfterMs)
+      : undefined;
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
   });
@@ -310,6 +355,35 @@ export async function ingestWatchLoopCommand(watchDir?: string, pollIntervalMs =
     notes: [`processed=${summary.processed}`, `ingested=${summary.ingested}`, `duplicates=${summary.duplicates}`, `failed=${summary.failed}`]
   });
   return JSON.stringify(summary, null, 2);
+}
+
+function consumeInboxOnce(
+  storage: JsonStorage,
+  dir: string,
+  summary: HookConsumeSummary,
+  onProcessed?: (entry: {
+    file: string;
+    result: ReturnType<typeof processHookFile>;
+  }) => void
+): string[] {
+  const queue = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => path.join(dir, entry.name))
+    .sort();
+  const notes: string[] = [];
+  for (const file of queue) {
+    const result = processHookFile(file, storage, true);
+    summary.processed += 1;
+    if (result.status === "ingested") summary.ingested += 1;
+    if (result.status === "duplicate") summary.duplicates += 1;
+    if (result.status === "failed") summary.failed += 1;
+    if (result.archivePath) summary.archived.push(result.archivePath);
+    if (result.errorPath) summary.failed_records.push(result.errorPath);
+    notes.push(`${path.basename(file)}:${result.status}`);
+    onProcessed?.({ file, result });
+  }
+  return notes;
 }
 
 export function onboardingCommand(format: "human" | "json" = "human"): string {
@@ -1138,74 +1212,6 @@ function buildEvolutionLanes(input: {
   return { inherit_keep: inheritKeep, retire_stop: retireStop, new_growth: newGrowth };
 }
 
-function deriveWishType(wishText: string): "growth" | "focus" | "repair" | "explore" {
-  if (/(修|补|止损|恢复|fix|repair|reduce|减少|纠正)/i.test(wishText)) return "repair";
-  if (/(聚焦|收敛|稳定|focus|stabil|沉淀)/i.test(wishText)) return "focus";
-  if (/(探索|尝试|试试|experiment|explore)/i.test(wishText)) return "explore";
-  return "growth";
-}
-
-function buildDefaultWishText(context: AgentContext, birthday?: BirthdayWishMemory | AgentContext["birthday_memory"]): string {
-  if (birthday && "wish_text" in birthday) return birthday.wish_text;
-  if (context.data_quality.sample_count === 0) {
-    return "先积累至少 5 条真实行为样本，让 Agent 不再靠猜理解我。";
-  }
-  if (context.data_quality.warnings.some((warning) => warning.includes("陈旧") || warning.includes("stale"))) {
-    return "用下一阶段的真实任务把 .nms 刷新到足够新鲜，让 Agent 的理解不过时。";
-  }
-  if (context.data_quality.confidence < 0.6) {
-    const topWorkflow = context.relevant_workflows[0]?.name;
-    return topWorkflow
-      ? `把「${topWorkflow}」收敛成稳定的 Agent 工作流，减少任务切换。`
-      : "把当前最常用的工作方式收敛成稳定流程，让 Agent 更懂我。";
-  }
-  const topDomain = context.relevant_domains[0]?.name ?? "当前主领域";
-  const topWorkflow = context.relevant_workflows[0]?.name;
-  return topWorkflow
-    ? `把「${topWorkflow}」在 ${topDomain} 场景里继续固化成可复用的 Agent 协作方式。`
-    : `围绕 ${topDomain} 持续沉淀可复用的 Agent 工作方式。`;
-}
-
-function alignmentScore(wishText: string, context: AgentContext): { score: number; hits: string[] } {
-  const hits: string[] = [];
-  for (const domain of context.relevant_domains) {
-    if (wishText.includes(domain.name)) hits.push(`domain:${domain.name}`);
-  }
-  for (const workflow of context.relevant_workflows) {
-    if (wishText.includes(workflow.name)) hits.push(`workflow:${workflow.name}`);
-    for (const step of workflow.steps) {
-      if (wishText.includes(step)) hits.push(`step:${step}`);
-    }
-  }
-  if (context.birthday_memory) {
-    if (wishText.includes(context.birthday_memory.north_star)) hits.push("north_star");
-    for (const target of context.birthday_memory.next_year_targets) {
-      if (wishText.includes(target)) hits.push(`target:${target}`);
-    }
-  }
-  const score = Math.min(100, context.data_quality.sample_count * 8 + hits.length * 18 + Math.round(context.data_quality.confidence * 20));
-  return { score, hits: [...new Set(hits)] };
-}
-
-function groundednessLevel(score: number): "high" | "medium" | "low" {
-  if (score >= 70) return "high";
-  if (score >= 40) return "medium";
-  return "low";
-}
-
-function candidateWishOptions(context: AgentContext): string[] {
-  const candidates = [
-    buildDefaultWishText(context, context.birthday_memory),
-    context.relevant_workflows[0]
-      ? `把「${context.relevant_workflows[0].name}」练成 Agent 和我之间最稳定的默认配合。`
-      : undefined,
-    context.data_quality.warnings.some((warning) => warning.includes("陈旧") || warning.includes("stale"))
-      ? "先刷新最近真实任务样本，再让 Agent 做强判断。"
-      : undefined
-  ].filter((item): item is string => Boolean(item));
-  return [...new Set(candidates)].slice(0, 3);
-}
-
 function flowSuggestions(db: ReturnType<JsonStorage["load"]>): Array<{ title: string; why: string; next_command: string }> {
   const suggestions: Array<{ title: string; why: string; next_command: string }> = [];
   if (db.sessions.length === 0) {
@@ -1714,6 +1720,9 @@ export function autoCommand(format: "human" | "json" = "human"): string {
   const suggestion = JSON.parse(suggestCommand({ task, format: "json" })) as SuggestPayload;
   const guard = JSON.parse(guardPendingCommand("json", policyProfile)) as GuardPayload;
   const birthdayWish = context.birthday_wish;
+  const effectiveBirthdayWish = birthdayWish?.source === "user" && birthdayWish.status === "active"
+    ? birthdayWish
+    : null;
   const night = guard.ok
     ? JSON.parse(nightCommand({ dryRun: true, explain: true, task, policyProfile })) as NightReport
     : null;
@@ -1724,7 +1733,7 @@ export function autoCommand(format: "human" | "json" = "human"): string {
   const workflow = suggestion.suggested_workflow.length > 0
     ? suggestion.suggested_workflow
     : context.relevant_workflows[0]?.steps ?? [];
-  const wishBias = birthdayWish?.execution_contract.next_agent_bias?.[0];
+  const wishBias = effectiveBirthdayWish?.execution_contract.next_agent_bias?.[0];
   const workflowText = workflow.length > 0 ? workflow.join(" -> ") : "(no stable workflow yet)";
   const birthdayMemory = context.birthday_memory;
   const nextStep = decision === "READY_FOR_REVIEW"
@@ -2729,11 +2738,22 @@ export async function birthdayWishCommand(options?: {
   const wishText = explicitWish
     || existingWish?.wish_text
     || buildDefaultWishText(context, existingWish ?? context.birthday_memory);
+  const reuseExistingWish =
+    Boolean(existingWish)
+    && (
+      !explicitWish
+      || explicitWish === existingWish?.wish_text
+    );
   const horizon = options?.horizon ?? existingWish?.horizon ?? "90d";
   const wishType = explicitWish ? deriveWishType(wishText) : existingWish?.wish_type ?? deriveWishType(wishText);
   const candidateWishes = candidateWishOptions(context);
   const alignment = alignmentScore(wishText, context);
-  const alignmentLevel = groundednessLevel(alignment.score);
+  const groundedScore = Math.min(
+    alignment.score,
+    source === "agent" ? 60 : 100,
+    context.data_quality.sample_count < 5 ? 60 : 100
+  );
+  const alignmentLevel = groundednessLevel(groundedScore);
   const relatedSkills = context.relevant_workflows
     .flatMap((workflow) => workflow.steps)
     .filter((step) => wishText.includes(step))
@@ -2757,32 +2777,30 @@ export async function birthdayWishCommand(options?: {
   ];
   const groundedWhy = [
     explicitWish
-      ? "这是一次明确表达的愿望，不是系统替你乱猜。"
+      ? (source === "user"
+          ? "这是一次明确表达的愿望，不是系统替你乱猜。"
+          : "这是一次由 Agent 提议的愿望方向，仍然需要用户确认。")
       : existingWish
         ? "当前没有新愿望输入，系统在用已有 wish 和真实数据刷新进度。"
         : "当前没有明确愿望输入，系统只基于真实 .nms 行为给出一个保守候选。",
     alignment.hits.length > 0
       ? `它和现有行为证据存在交集：${alignment.hits.join(", ")}。`
       : "它和现有行为证据交集不多，因此只适合当 proposed wish。",
-    `当前样本量=${context.data_quality.sample_count}，workflow confidence=${context.data_quality.confidence}。`
+    `当前样本量=${context.data_quality.sample_count}，workflow confidence=${context.data_quality.confidence}。`,
+    ...(!explicitWish && source === "agent"
+      ? ["因为这是系统自动生成的候选愿望，groundedness 会被保守封顶，不会包装成高确定性方向。"] 
+      : [])
   ];
-  const keep = existingWish?.execution_contract.keep
-    ?? context.birthday_memory?.retained_commitments.slice(0, 3)
-    ?? ["保留真实 .nms 数据优先，不要靠想象定义自己。"];
-  const stop = existingWish?.execution_contract.stop
-    ?? [
-      ...(context.birthday_memory?.risks_to_watch.slice(0, 2) ?? []),
-      ...(context.data_quality.warnings.length > 0 ? [context.data_quality.warnings[0]] : [])
-    ].filter(Boolean).slice(0, 3);
-  const start = existingWish?.execution_contract.start
-    ?? [
-      wishType === "focus"
-        ? "把愿望拆成 30 天内可被行为验证的工作动作。"
-        : "让接下来的真实任务尽量对齐这个愿望，而不是停留在口号层。",
-      context.relevant_workflows[0]
-        ? `优先复用 ${context.relevant_workflows[0].name}，观察它是否支持这个愿望。`
-        : "先积累稳定 workflow，再谈长期升级。"
-    ].slice(0, 3);
+  const executionDefaults = defaultWishExecutionContract(context, wishType);
+  const keep = reuseExistingWish
+    ? existingWish?.execution_contract.keep ?? executionDefaults.keep
+    : executionDefaults.keep;
+  const stop = reuseExistingWish
+    ? existingWish?.execution_contract.stop ?? executionDefaults.stop
+    : executionDefaults.stop;
+  const start = reuseExistingWish
+    ? existingWish?.execution_contract.start ?? executionDefaults.start
+    : executionDefaults.start;
   const successSignals = [
     "相关 workflow 被重复复用，而不是只出现一次。",
     "相关 skill 频率上升，且样本足够新鲜。",
@@ -2833,16 +2851,20 @@ export async function birthdayWishCommand(options?: {
   fs.mkdirSync(historyDir, { recursive: true });
 
   const jsonPath = path.join(derivedDir, "latest.json");
-  const historyPath = path.join(historyDir, `${stamp}.json`);
   const htmlPath = path.join(reportDir, "wish.html");
   const mdPath = path.join(reportDir, "wish.md");
-  const wishId = existingWish?.latest_wish_ref?.split("/").at(-1)?.replace(".json", "") ?? `wish_${Date.now()}`;
+  const existingWishId = existingWish?.wish_id
+    ?? (existingWish?.wish_text ? `wish_${sha256(existingWish.wish_text).slice(0, 12)}` : undefined);
+  const wishId = reuseExistingWish
+    ? existingWishId ?? `wish_${Date.now()}`
+    : `wish_${Date.now()}`;
+  const historyPath = path.join(historyDir, `${wishId}-${stamp}.json`);
   const sourceHash = sha256(JSON.stringify({
     generatedAt,
     wishText,
     source,
     status,
-    groundedness: alignment.score,
+    groundedness: groundedScore,
     sampleCount: context.data_quality.sample_count
   }));
   const contract: BirthdayWishContract = {
@@ -2854,9 +2876,9 @@ export async function birthdayWishCommand(options?: {
     wish_text: wishText,
     wish_type: wishType,
     horizon,
-    north_star_alignment: alignment.score >= 70 ? "high" : alignment.score >= 40 ? "medium" : "low",
+    north_star_alignment: groundedScore >= 70 ? "high" : groundedScore >= 40 ? "medium" : "low",
     groundedness: {
-      score: alignment.score,
+      score: groundedScore,
       level: alignmentLevel,
       why: groundedWhy,
       evidence_refs: context.relevant_workflows.flatMap((workflow) => workflow.evidence_refs).slice(0, 5)
@@ -2886,6 +2908,7 @@ export async function birthdayWishCommand(options?: {
       markdown_ref: relativeToNmsRoot(storage, mdPath)
     }
   };
+  const wishIsExecutionActive = contract.source === "user" && contract.status === "active";
 
   writeJsonArtifact(jsonPath, contract);
   writeJsonArtifact(historyPath, contract);
@@ -2893,9 +2916,15 @@ export async function birthdayWishCommand(options?: {
 
 生成时间：${generatedAt}
 
+状态：${contract.status}
+
+来源：${contract.source}
+
 ## Wish
 
 ${wishText}
+
+${wishIsExecutionActive ? "> 这是一个已经确认的长期愿望契约，/nms-auto 可以把它当作长期偏置参考。" : "> 这仍然是候选愿望或待确认方向，/nms-auto 不会直接把它当成执行偏置。"}
 
 ## Groundedness
 
@@ -2925,13 +2954,22 @@ ${contract.execution_contract.next_agent_bias.map((item) => `- ${item}`).join("\
 ${contract.progress.latest_signals.map((item) => `- ${item}`).join("\n")}
 `;
   fs.writeFileSync(mdPath, markdown, "utf8");
+  const wishHeadline = wishIsExecutionActive
+    ? "你不只是回顾过去，还在给未来下达命令。"
+    : "你正在为未来提出一个候选方向，而不是仓促定案。";
+  const wishSubtitle = wishIsExecutionActive
+    ? "这是一份基于真实 .nms 行为数据生成的长期愿望契约。它不是空想清单，而是让 Agent 知道你接下来想往哪里长、应该怎么帮你长。"
+    : "这是一份基于真实 .nms 行为数据生成的愿望候选。它先帮助你判断方向是否靠谱，只有在你确认后，才应该变成 Agent 的长期偏置。";
+  const wishFooter = wishIsExecutionActive
+    ? "真实数据来源：<code>.nms/data.json</code>、<code>.nms/sessions</code>、<code>.nms/derived/birthday/latest.json</code>、<code>.nms/derived/birthday-wish/latest.json</code>。这份 wish contract 会被 <code>/nms-auto</code> 作为长期偏置读取，但不会覆盖安全边界。"
+    : "真实数据来源：<code>.nms/data.json</code>、<code>.nms/sessions</code>、<code>.nms/derived/birthday/latest.json</code>、<code>.nms/derived/birthday-wish/latest.json</code>。当前状态还是候选愿望，它会被 <code>/nms-auto</code> 当作参考上下文展示，但不会直接变成执行偏置。";
 
   const html = visualShell({
     theme: "birthday",
     title: "NMS Birthday Wish Contract",
     eyebrow: "NMS Birthday Wish · Future Contract",
-    headline: "你不只是回顾过去，还在给未来下达命令。",
-    subtitle: "这是一份基于真实 .nms 行为数据生成的长期愿望契约。它不是空想清单，而是让 Agent 知道你接下来想往哪里长、应该怎么帮你长。",
+    headline: wishHeadline,
+    subtitle: wishSubtitle,
     metrics: [
       { label: "Wish Status", value: contract.status, note: contract.source },
       { label: "Groundedness", value: String(contract.groundedness.score), note: contract.groundedness.level },
@@ -2999,7 +3037,7 @@ ${contract.progress.latest_signals.map((item) => `- ${item}`).join("\n")}
         </div>
       </section>
       <section class="card">
-        <div class="source">真实数据来源：<code>.nms/data.json</code>、<code>.nms/sessions</code>、<code>.nms/derived/birthday/latest.json</code>、<code>.nms/derived/birthday-wish/latest.json</code>。这份 wish contract 会被 <code>/nms-auto</code> 作为长期偏置读取，但不会覆盖安全边界。</div>
+        <div class="source">${wishFooter}</div>
       </section>`
   });
   fs.writeFileSync(htmlPath, html, "utf8");
@@ -3041,9 +3079,13 @@ ${contract.progress.latest_signals.map((item) => `- ${item}`).join("\n")}
     "== NMS Birthday Wish ==",
     `Wish: ${contract.wish_text}`,
     `Status: ${contract.status}`,
+    `Source: ${contract.source}`,
     `Groundedness: ${contract.groundedness.score} (${contract.groundedness.level})`,
     `North Star Fit: ${contract.north_star_alignment}`,
     `Progress: ${contract.progress.summary}`,
+    wishIsExecutionActive
+      ? "Execution: confirmed wish, /nms-auto may inherit it as a long-term bias."
+      : "Execution: candidate wish only, /nms-auto will not directly bias execution from it.",
     `HTML: ${htmlPath}`,
     payload.next_step
   ].join("\n");

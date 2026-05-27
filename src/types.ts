@@ -230,6 +230,7 @@ export interface BirthdayWishContract {
 }
 
 export interface BirthdayWishMemory {
+  wish_id: string;
   latest_wish_ref: string;
   generated_at: string;
   source: BirthdayWishSource;

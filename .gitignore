@@ -11,3 +11,4 @@ my-video/
 docs/video
 docs/demo
 *.tgz
+outputs/

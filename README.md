@@ -2,7 +2,7 @@
 
 默认语言：中文 | English: [README.en.md](./README.en.md)
 
-![NMS Skill Hero](./images/nms-skill-hero.png)
+![NMS Skill Hero](./images/nms-companion-cover.png)
 
 NMS 不是“再写几个 Prompt”的工具，而是一个可持续进化的行为工程系统：
 - 白天学习你的真实工作行为（skills/workflow/style）
